@@ -1,0 +1,100 @@
+import { openSettingsDb, STORE_SETTINGS } from "./idb";
+
+const LS_KEY = "musiclist-gvl-label-db-v1";
+const LS_KEY_LEGACY = "easy-gema-gvl-label-db-v1";
+const KEY_IDB = "gvlLabelDbV1";
+
+export type GvlLabelEntry = {
+  labelcode: string;
+  label: string;
+  /** Kurzname/Kürzel aus dem PDF (eigene Spalte). */
+  kuerzel: string;
+  /** PLM aus dem PDF (eigene Spalte). */
+  plm: string;
+  hersteller: string;
+  rechterueckrufe: string;
+};
+
+export type GvlLabelDb = {
+  importedAtIso: string;
+  entries: GvlLabelEntry[];
+};
+
+function normalizeGvlEntries(entries: unknown): GvlLabelEntry[] {
+  if (!Array.isArray(entries)) return [];
+  return (entries as Partial<GvlLabelEntry>[]).map((e) => ({
+    labelcode: String(e.labelcode ?? ""),
+    label: String(e.label ?? ""),
+    kuerzel: typeof e.kuerzel === "string" ? e.kuerzel : "",
+    plm: typeof e.plm === "string" ? e.plm : "",
+    hersteller: String(e.hersteller ?? ""),
+    rechterueckrufe: String(e.rechterueckrufe ?? ""),
+  }));
+}
+
+export function loadGvlLabelDb(): GvlLabelDb | null {
+  try {
+    let raw = localStorage.getItem(LS_KEY);
+    if (!raw) {
+      const old = localStorage.getItem(LS_KEY_LEGACY);
+      if (old) {
+        localStorage.setItem(LS_KEY, old);
+        localStorage.removeItem(LS_KEY_LEGACY);
+        raw = old;
+      }
+    }
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const p = parsed as Partial<GvlLabelDb>;
+    if (!Array.isArray(p.entries) || typeof p.importedAtIso !== "string") return null;
+    return { importedAtIso: p.importedAtIso, entries: normalizeGvlEntries(p.entries) };
+  } catch {
+    return null;
+  }
+}
+
+async function saveGvlLabelDbToIdb(dbValue: GvlLabelDb): Promise<void> {
+  try {
+    const db = await openSettingsDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_SETTINGS, "readwrite");
+      tx.objectStore(STORE_SETTINGS).put(dbValue, KEY_IDB);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function loadGvlLabelDbFromIdb(): Promise<GvlLabelDb | null> {
+  try {
+    const db = await openSettingsDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_SETTINGS, "readonly");
+      const req = tx.objectStore(STORE_SETTINGS).get(KEY_IDB);
+      req.onsuccess = () => {
+        const r = req.result as unknown;
+        if (!r || typeof r !== "object") resolve(null);
+        else {
+          const o = r as Partial<GvlLabelDb>;
+          if (typeof o.importedAtIso !== "string" || !Array.isArray(o.entries)) resolve(null);
+          else resolve({ importedAtIso: o.importedAtIso, entries: normalizeGvlEntries(o.entries) });
+        }
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export function saveGvlLabelDb(dbValue: GvlLabelDb): void {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(dbValue));
+  } catch {
+    /* ignore */
+  }
+  void saveGvlLabelDbToIdb(dbValue);
+}
