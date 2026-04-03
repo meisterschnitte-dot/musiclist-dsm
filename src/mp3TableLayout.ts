@@ -50,6 +50,33 @@ export function mp3ResizeMinForColumnId(id: Mp3TableColumnId): number {
   return TAG_COLUMN_MIN_WIDTHS[id] ?? 28;
 }
 
+export function mp3ColumnWidthMax(id: Mp3TableColumnId): number {
+  switch (id) {
+    case "num":
+      return 120;
+    case "filename":
+      return 5600;
+    case "created":
+    case "edited":
+      return 220;
+    default:
+      return 4000;
+  }
+}
+
+export function sanitizeMp3ColumnWidths(
+  widths: Record<Mp3TableColumnId, number>
+): Record<Mp3TableColumnId, number> {
+  const o = { ...widths };
+  for (const id of MP3_TABLE_ALL_COLUMN_IDS) {
+    const min = mp3ResizeMinForColumnId(id);
+    const max = mp3ColumnWidthMax(id);
+    const w = o[id] ?? min;
+    o[id] = Math.min(max, Math.max(min, w));
+  }
+  return o;
+}
+
 export function defaultMp3ColumnWidthsById(): Record<Mp3TableColumnId, number> {
   const o = {} as Record<Mp3TableColumnId, number>;
   o.num = Math.max(defaultWidthFromMin(mp3ResizeMinForColumnId("num")), 108);
@@ -136,7 +163,7 @@ export function loadMp3TableLayout(): Mp3TableLayoutState {
     if (visibleCount < 1) {
       return defaults;
     }
-    return { order, hidden, widths };
+    return { order, hidden, widths: sanitizeMp3ColumnWidths(widths) };
   } catch {
     return defaults;
   }

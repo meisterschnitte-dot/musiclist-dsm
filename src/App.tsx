@@ -123,19 +123,23 @@ import {
   emptyMp3FiltersRecord,
   getMp3ColumnLabel,
   loadMp3TableLayout,
+  mp3ColumnWidthMax,
   mp3ResizeMinForColumnId,
   MP3_TABLE_ALL_COLUMN_IDS,
+  sanitizeMp3ColumnWidths,
   reorderMp3Columns,
   saveMp3TableLayout,
   type Mp3TableColumnId,
 } from "./mp3TableLayout";
 import {
   defaultEdlColumnWidthsById,
+  edlColumnWidthMax,
   emptyEdlFiltersRecord,
   getEdlColumnLabel,
   loadEdlTableLayout,
   edlResizeMinForColumnId,
   EDL_TABLE_ALL_COLUMN_IDS,
+  sanitizeEdlColumnWidths,
   reorderEdlColumns,
   saveEdlTableLayout,
   type EdlTableColumnId,
@@ -1610,7 +1614,7 @@ export default function App() {
     saveMp3TableLayout({
       order: mp3ColumnOrder,
       hidden: mp3ColumnHidden,
-      widths: mp3ColWidthsById,
+      widths: sanitizeMp3ColumnWidths(mp3ColWidthsById),
     });
   }, [mp3ColumnOrder, mp3ColumnHidden, mp3ColWidthsById]);
 
@@ -1657,7 +1661,7 @@ export default function App() {
     saveEdlTableLayout({
       order: edlColumnOrder,
       hidden: edlColumnHidden,
-      widths: edlColWidthsById,
+      widths: sanitizeEdlColumnWidths(edlColWidthsById),
     });
   }, [edlColumnOrder, edlColumnHidden, edlColWidthsById]);
 
@@ -2239,6 +2243,8 @@ export default function App() {
         clientX: e.clientX,
         startWidths: [...edlColWidthsRef.current],
         minForIndex: (i) => edlResizeMinForColumnId(ids[i]!),
+        maxForIndex: (i) => edlColumnWidthMax(ids[i]!),
+        lastColumnAuto: true,
         getColElements: () => edlColGroupRef.current?.children,
         onCommit: (nextWidths) => {
           setEdlColWidthsById((prev) => {
@@ -2246,7 +2252,7 @@ export default function App() {
             ids.forEach((id, i) => {
               n[id] = nextWidths[i]!;
             });
-            return n;
+            return sanitizeEdlColumnWidths(n);
           });
         },
       });
@@ -2264,6 +2270,8 @@ export default function App() {
         clientX: e.clientX,
         startWidths: [...mp3ColWidthsRef.current],
         minForIndex: (i) => mp3ResizeMinForColumnId(ids[i]!),
+        maxForIndex: (i) => mp3ColumnWidthMax(ids[i]!),
+        lastColumnAuto: true,
         getColElements: () => mp3ColGroupRef.current?.children,
         onCommit: (nextWidths) => {
           setMp3ColWidthsById((prev) => {
@@ -2271,7 +2279,7 @@ export default function App() {
             ids.forEach((id, i) => {
               n[id] = nextWidths[i]!;
             });
-            return n;
+            return sanitizeMp3ColumnWidths(n);
           });
         },
       });
@@ -2588,9 +2596,19 @@ export default function App() {
                       <div className="table-wrap table-wrap--dense">
                         <table className="table-dense table-resizable">
                           <colgroup ref={edlColGroupRef}>
-                            {edlVisibleWidthsArr.map((w, i) => (
-                              <col key={edlVisibleColumnIds[i]} style={{ width: w, minWidth: 0 }} />
-                            ))}
+                            {edlVisibleWidthsArr.map((w, i) => {
+                              const last = i === edlVisibleWidthsArr.length - 1;
+                              return (
+                                <col
+                                  key={edlVisibleColumnIds[i]}
+                                  style={
+                                    last
+                                      ? { width: "auto", minWidth: w }
+                                      : { width: w, minWidth: 0 }
+                                  }
+                                />
+                              );
+                            })}
                           </colgroup>
                           <thead>
                             <tr>
@@ -2949,9 +2967,19 @@ export default function App() {
                 <div className="table-wrap table-wrap--dense">
                   <table className="table-dense table-resizable">
                     <colgroup ref={mp3ColGroupRef}>
-                      {mp3VisibleWidthsArr.map((w, i) => (
-                        <col key={mp3VisibleColumnIds[i]} style={{ width: w, minWidth: 0 }} />
-                      ))}
+                      {mp3VisibleWidthsArr.map((w, i) => {
+                        const last = i === mp3VisibleWidthsArr.length - 1;
+                        return (
+                          <col
+                            key={mp3VisibleColumnIds[i]}
+                            style={
+                              last
+                                ? { width: "auto", minWidth: w }
+                                : { width: w, minWidth: 0 }
+                            }
+                          />
+                        );
+                      })}
                     </colgroup>
                     <thead>
                       <tr>

@@ -2105,9 +2105,8 @@ table {
 
 table.table-dense.table-resizable {
   table-layout: fixed;
-  /* Mindestens so breit wie der Panel-Bereich (keine toten Flächen links/rechts bei schmaler Summe der Spalten); breiter wenn nötig. */
+  /* 100% Breite; Restbreite geht an die letzte Spalte (colgroup width:auto), nicht an die erste — vermeidet „#“-Spalte frisst alles“ bei max-width:0-Zellen + früher min-width:max-content. */
   width: 100%;
-  min-width: max-content;
   max-width: none;
 }
 

@@ -55,6 +55,38 @@ export function edlResizeMinForColumnId(id: EdlTableColumnId): number {
   return TAG_COLUMN_MIN_WIDTHS[id] ?? 28;
 }
 
+/** Obergrenze pro Spalte (verhindert kaputte localStorage-Werte und zu breite #/TC-Spalten). */
+export function edlColumnWidthMax(id: EdlTableColumnId): number {
+  switch (id) {
+    case "num":
+      return 120;
+    case "track":
+      return 240;
+    case "tcIn":
+    case "tcOut":
+      return 200;
+    case "duration":
+      return 160;
+    case "title":
+      return 5600;
+    default:
+      return 4000;
+  }
+}
+
+export function sanitizeEdlColumnWidths(
+  widths: Record<EdlTableColumnId, number>
+): Record<EdlTableColumnId, number> {
+  const o = { ...widths };
+  for (const id of EDL_TABLE_ALL_COLUMN_IDS) {
+    const min = edlResizeMinForColumnId(id);
+    const max = edlColumnWidthMax(id);
+    const w = o[id] ?? min;
+    o[id] = Math.min(max, Math.max(min, w));
+  }
+  return o;
+}
+
 export function defaultEdlColumnWidthsById(): Record<EdlTableColumnId, number> {
   const o = {} as Record<EdlTableColumnId, number>;
   o.num = Math.max(defaultWidthFromMin(edlResizeMinForColumnId("num")), 56);
@@ -141,7 +173,7 @@ export function loadEdlTableLayout(): EdlTableLayoutState {
     if (EDL_TABLE_ALL_COLUMN_IDS.length - hidden.size < 1) {
       return defaults;
     }
-    return { order, hidden, widths };
+    return { order, hidden, widths: sanitizeEdlColumnWidths(widths) };
   } catch {
     return defaults;
   }
