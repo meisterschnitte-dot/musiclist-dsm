@@ -1,8 +1,5 @@
 export type UserRole = "admin" | "user";
 
-/** Festes Initialpasswort für eingeladene Benutzer (Server verwendet dasselbe). */
-export const INITIAL_INVITE_PASSWORD = "Initial#123";
-
 /** Öffentliche Nutzerdaten (Passwort-Hash nur auf dem Server). */
 export type AppUserRecord = {
   id: string;

@@ -35,12 +35,12 @@ function plausibleEmail(s: string): boolean {
 export function createUserApiRouter(): Router {
   const r = Router();
 
-  r.get("/users/hints", bearerAuth, (_req, res) => {
+  r.get("/users/hints", (_req, res) => {
     const users = listUsers();
     res.json({
       hints: users.map((u: StoredUser) => ({
         id: u.id,
-        email: u.email,
+        email: u.email.replace(/^(.{2})(.*)(@.*)$/, (_m, a, b, c) => a + b.replace(/./g, "*") + c),
         legacyLoginName: u.legacyLoginName,
       })),
     });
@@ -207,9 +207,21 @@ export function createUserApiRouter(): Router {
     const id = String(req.params.id);
     const au = req.authUser!;
     const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+    const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
     if (au.id !== id && au.role !== "admin") {
       res.status(403).json({ error: "Nicht berechtigt." });
       return;
+    }
+    // Non-admins changing their own password must verify current password (unless mustChangePassword)
+    if (au.id === id && au.role !== "admin" && !au.mustChangePassword) {
+      if (!currentPassword) {
+        res.status(400).json({ error: "Aktuelles Passwort ist erforderlich." });
+        return;
+      }
+      if (!verifyPassword(au, currentPassword)) {
+        res.status(401).json({ error: "Aktuelles Passwort ist falsch." });
+        return;
+      }
     }
     if (newPassword.length < 8) {
       res.status(400).json({ error: "Neues Passwort mindestens 8 Zeichen." });

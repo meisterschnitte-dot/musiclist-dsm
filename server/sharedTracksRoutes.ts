@@ -39,7 +39,7 @@ export function createSharedTracksRouter(): Router {
   });
 
   /** Zusätzliche Pfade ins Index-Register (z. B. aus Playlist-Verknüpfungen). */
-  r.post("/shared/music-db/register", async (req: Request, res: Response) => {
+  r.post("/shared/music-db/register", requireAdmin, async (req: Request, res: Response) => {
     try {
       const paths = pathsArrayBody(req.body);
       const merged = await registerMusicDatabasePaths(paths);
@@ -50,7 +50,7 @@ export function createSharedTracksRouter(): Router {
   });
 
   /** Index-Einträge entfernen (kein Dateisystem-Löschen). */
-  r.post("/shared/music-db/remove-paths", async (req: Request, res: Response) => {
+  r.post("/shared/music-db/remove-paths", requireAdmin, async (req: Request, res: Response) => {
     try {
       const paths = pathsArrayBody(req.body);
       const merged = await removeMusicDatabaseIndexPaths(paths);

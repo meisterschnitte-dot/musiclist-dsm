@@ -9,7 +9,6 @@ import type { AppUserRecord, UserRole } from "../storage/appUsersStorage";
 import {
   countAdmins,
   findUserByEmail,
-  INITIAL_INVITE_PASSWORD,
   normalizeUserEmail,
 } from "../storage/appUsersStorage";
 
@@ -93,7 +92,7 @@ export function UserManagementModal({
         setInfo("Einladungs-E-Mail wurde gesendet.");
       } catch (e) {
         setInfo(
-          `Benutzer wurde angelegt (Initialpasswort: ${INITIAL_INVITE_PASSWORD}). E-Mail-Versand fehlgeschlagen: ${e instanceof Error ? e.message : String(e)} — bitte SMTP prüfen und ggf. Mail-Server starten (\`npm run dev\`).`
+          `Benutzer wurde angelegt. E-Mail-Versand fehlgeschlagen: ${e instanceof Error ? e.message : String(e)} — bitte SMTP prüfen und ggf. Mail-Server starten (\`npm run dev\`). Das Initialpasswort wurde dem Benutzer nicht mitgeteilt.`
         );
       }
     } catch (e) {
@@ -151,9 +150,8 @@ export function UserManagementModal({
           Benutzer verwalten
         </h2>
         <p className="modal-lead">
-          Administratoren haben Zugriff auf „Verwaltung“ und dürfen MP3-Dateien aus der
-          Musikdatenbank löschen. Eingeladene Benutzer erhalten das Initialpasswort{" "}
-          <span className="mono-cell">{INITIAL_INVITE_PASSWORD}</span> per E-Mail und werden beim
+          Administratoren haben Zugriff auf „Verwaltung” und dürfen MP3-Dateien aus der
+          Musikdatenbank löschen. Eingeladene Benutzer erhalten ihre Zugangsdaten per E-Mail und werden beim
           ersten Login zum Passwortwechsel aufgefordert. Alle Konten liegen zentral auf dem Server.
         </p>
         {err && <p className="user-auth-err modal-lead">{err}</p>}

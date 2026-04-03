@@ -16,8 +16,8 @@ export function ChangePasswordModal({ user, users, onUsersUpdated }: Props) {
 
   const submit = useCallback(async () => {
     setErr(null);
-    if (pw.length < 6) {
-      setErr("Neues Passwort mindestens 6 Zeichen.");
+    if (pw.length < 8) {
+      setErr("Neues Passwort mindestens 8 Zeichen.");
       return;
     }
     if (pw !== pw2) {
@@ -69,7 +69,7 @@ export function ChangePasswordModal({ user, users, onUsersUpdated }: Props) {
               onChange={(e) => setPw(e.target.value)}
               autoComplete="new-password"
               required
-              minLength={6}
+              minLength={8}
             />
           </label>
           <label className="tag-field">
@@ -80,7 +80,7 @@ export function ChangePasswordModal({ user, users, onUsersUpdated }: Props) {
               onChange={(e) => setPw2(e.target.value)}
               autoComplete="new-password"
               required
-              minLength={6}
+              minLength={8}
             />
           </label>
           <button type="submit" className="btn-modal primary user-auth-submit" disabled={busy}>
