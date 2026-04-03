@@ -8,6 +8,7 @@ export type AudioTags = {
   year?: string;
   comment?: string;
   composer?: string;
+  isrc?: string;
   labelcode?: string;
   label?: string;
   hersteller?: string;
@@ -51,6 +52,7 @@ const AUDIO_TAG_KEYS: (keyof AudioTags)[] = [
   "year",
   "comment",
   "composer",
+  "isrc",
   "labelcode",
   "label",
   "hersteller",
@@ -67,6 +69,7 @@ export const AUDIO_TAG_TABLE_COLUMN_KEYS: (keyof AudioTags)[] = [
   "year",
   "composer",
   "comment",
+  "isrc",
   "labelcode",
   "label",
   "hersteller",
@@ -80,6 +83,7 @@ export const AUDIO_TAG_FIELD_LABELS: Record<keyof AudioTags, string> = {
   year: "Jahr",
   comment: "Kommentar",
   composer: "Komponist",
+  isrc: "ISRC",
   labelcode: "Labelcode",
   label: "Label",
   hersteller: "Hersteller",

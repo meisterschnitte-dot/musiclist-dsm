@@ -36,10 +36,12 @@ export const EDL_COLUMN_MIN_WIDTHS: number[] = [
   ...AUDIO_TAG_TABLE_COLUMN_KEYS.map((k) => TAG_COLUMN_MIN_WIDTHS[k]),
 ];
 
-/** Mindestbreiten je Spalte — Musikdatenbank (#, Dateiname, …). */
+/** Mindestbreiten je Spalte — Musikdatenbank (#, Dateiname, Erstellt, Bearbeitet, …). */
 export const MP3_COLUMN_MIN_WIDTHS: number[] = [
   headerMinPx("#"),
   headerMinPx("Dateiname"),
+  headerMinPx("Erstellt"),
+  headerMinPx("Bearbeitet"),
   ...AUDIO_TAG_TABLE_COLUMN_KEYS.map((k) => TAG_COLUMN_MIN_WIDTHS[k]),
 ];
 
@@ -56,6 +58,8 @@ export function defaultMp3ColumnWidths(): number[] {
   w[0] = Math.max(w[0], 108);
   /* „Dateiname“ bewusst großzügiger als z. B. „Jahr“ */
   w[1] = Math.max(w[1], 300);
+  w[2] = Math.max(w[2], 132);
+  w[3] = Math.max(w[3], 132);
   return w;
 }
 

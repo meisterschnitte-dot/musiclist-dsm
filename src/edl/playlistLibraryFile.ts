@@ -11,6 +11,24 @@ export function isPlaylistLibraryFileName(fileName: string): boolean {
   return l.endsWith(PLAYLIST_LIBRARY_FILE_EXT) || l.endsWith(LEGACY_PLAYLIST_LIBRARY_FILE_EXT);
 }
 
+/**
+ * Dieselbe Playlist im Browser (z. B. `Film.edl` und nach Export `Film.list`;
+ * oder `.xls` → `.list` mit gleichem Stamm).
+ */
+export function sameLibraryPlaylistDocumentName(a: string, b: string): boolean {
+  const stem = (fn: string) => {
+    const t = fn.trim();
+    const l = t.toLowerCase();
+    if (l.endsWith(".edl")) return t.slice(0, -4);
+    if (l.endsWith(".list")) return t.slice(0, -5);
+    if (l.endsWith(".egpl")) return t.slice(0, -5);
+    if (l.endsWith(".xls")) return t.slice(0, -4);
+    const d = t.lastIndexOf(".");
+    return d === -1 ? t : t.slice(0, d);
+  };
+  return stem(a).toLowerCase() === stem(b).toLowerCase();
+}
+
 export type PersistedPlaylistLibraryV1 = {
   v: 1;
   displayTitle: string | null;

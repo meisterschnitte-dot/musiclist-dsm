@@ -22,6 +22,10 @@ export async function embedId3InMp3Blob(blob: Blob, tags: AudioTags): Promise<Bl
     });
   }
 
+  if (t.isrc?.trim()) {
+    writer.setFrame("TXXX", { description: "ISRC", value: t.isrc.trim() });
+  }
+
   if (t.labelcode?.trim()) {
     writer.setFrame("TXXX", { description: "Labelcode", value: t.labelcode.trim() });
   }

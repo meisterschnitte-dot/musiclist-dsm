@@ -1,4 +1,6 @@
-import type { AudioTags } from "../audio/audioTags";
+import { mergeAudioTags, type AudioTags } from "../audio/audioTags";
+import type { PlaylistEntry } from "../edl/types";
+import { basenamePath } from "../tracks/sanitizeFilename";
 import { openSettingsDb, STORE_SETTINGS } from "./idb";
 
 /** Geteilt: Tags zu MP3-Dateinamen (`f:`). */
@@ -207,4 +209,67 @@ export function playlistTagKey(entryId: string): string {
 
 export function fileTagKey(fileName: string): string {
   return `f:${fileName.toLowerCase()}`;
+}
+
+/**
+ * Tag-Overlay für eine Playlist-Zeile: bei verknüpfter MP3 `f:` + Legacy `p:` (Migration);
+ * ohne Verknüpfung nur `p:`.
+ */
+export function playlistRowTagOverlay(row: PlaylistEntry, tagStore: TagStore): AudioTags {
+  const pk = playlistTagKey(row.id);
+  const linked = row.linkedTrackFileName?.trim();
+  if (linked) {
+    return mergeAudioTags(tagStore[pk] ?? {}, tagStore[fileTagKey(linked)] ?? {});
+  }
+  return tagStore[pk] ?? {};
+}
+
+/** Speicher-Schlüssel für neue Tag-Overlays: bei Link `f:` (geteilt mit Musikdatenbank), sonst `p:`. */
+export function playlistEntryTagStoreKey(row: PlaylistEntry): string {
+  const linked = row.linkedTrackFileName?.trim();
+  if (linked) return fileTagKey(linked);
+  return playlistTagKey(row.id);
+}
+
+function normTagPath(s: string): string {
+  return s.replace(/\\/g, "/").trim().toLowerCase();
+}
+
+/**
+ * Schlüssel aus dem Tag-Store entfernen, die zu gelöschten MP3-Pfaden gehören:
+ * — `f:` mit vollem relativen Pfad (und ggf. nur Dateiname, wenn kein anderer DB-Eintrag denselben Basename hat),
+ * — `p:` für Zeilen, die mit einem der gelöschten Pfade verknüpft waren (sonst bleiben Zeilen-Tags und erscheinen nach Neuverknüpfung wieder).
+ */
+export function collectTagStoreKeysForRemovedMusicPaths(
+  removedRelativePaths: string[],
+  playlist: PlaylistEntry[] | null | undefined,
+  /** Aktuelle Musikdatenbank nach dem Löschen; bei `null` werden keine reinen Basename-`f:`-Schlüssel gelöscht. */
+  musicDbPathsAfterRemoval: string[] | null
+): string[] {
+  const removedNorm = new Set(removedRelativePaths.map(normTagPath));
+  const keys = new Set<string>();
+
+  for (const p of removedRelativePaths) {
+    keys.add(fileTagKey(p));
+    if (musicDbPathsAfterRemoval) {
+      const b = basenamePath(p);
+      const bl = b.toLowerCase();
+      const otherStillHasBasename = musicDbPathsAfterRemoval.some(
+        (x) => basenamePath(x).toLowerCase() === bl
+      );
+      if (!otherStillHasBasename) {
+        keys.add(fileTagKey(b));
+      }
+    }
+  }
+
+  for (const row of playlist ?? []) {
+    const linked = row.linkedTrackFileName?.trim();
+    if (!linked) continue;
+    if (removedNorm.has(normTagPath(linked))) {
+      keys.add(playlistTagKey(row.id));
+    }
+  }
+
+  return [...keys];
 }

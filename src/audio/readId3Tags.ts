@@ -8,6 +8,7 @@ import type { AudioTags } from "./audioTags";
 
 /** Entspricht den TXXX-Beschreibungen aus `embedId3.ts`. */
 const TXXX_ID_TO_KEY: Record<string, keyof AudioTags> = {
+  "TXXX:ISRC": "isrc",
   "TXXX:Labelcode": "labelcode",
   "TXXX:Label": "label",
   "TXXX:Hersteller": "hersteller",
@@ -44,6 +45,11 @@ function audioTagsFromMetadata(metadata: IAudioMetadata): AudioTags {
   if (c.composer?.length) {
     const parts = c.composer.map((x) => x.trim()).filter(Boolean);
     if (parts.length) out.composer = parts.join(", ");
+  }
+
+  if (c.isrc?.length) {
+    const first = c.isrc.map((x) => x.trim()).find(Boolean);
+    if (first) out.isrc = first;
   }
 
   for (const tags of Object.values(metadata.native)) {

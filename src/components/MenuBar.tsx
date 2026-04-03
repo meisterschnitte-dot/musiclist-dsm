@@ -13,6 +13,13 @@ type MenuBarProps = {
   onSystemSettings: () => void;
   /** Kurze Erfolgshinweise; optional in der Leiste rechts */
   infoMessage?: string | null;
+  /** Schriftgröße (0.75–1.5), steuert `rem` über `--app-font-scale`. */
+  fontScale: number;
+  onFontScaleDec: () => void;
+  onFontScaleInc: () => void;
+  onFontScaleReset: () => void;
+  fontScaleDecDisabled: boolean;
+  fontScaleIncDisabled: boolean;
 };
 
 export function MenuBar({
@@ -24,6 +31,12 @@ export function MenuBar({
   onOpenStoragePaths,
   onSystemSettings,
   infoMessage,
+  fontScale,
+  onFontScaleDec,
+  onFontScaleInc,
+  onFontScaleReset,
+  fontScaleDecDisabled,
+  fontScaleIncDisabled,
 }: MenuBarProps) {
   const [open, setOpen] = useState<MenuId>(null);
   const barRef = useRef<HTMLElement>(null);
@@ -127,11 +140,53 @@ export function MenuBar({
           )}
         </div>
       </div>
-      {infoMessage ? (
-        <span className="menubar-info" role="status" aria-live="polite">
-          {infoMessage}
-        </span>
-      ) : null}
+      <div className="menubar-right">
+        <div
+          className="menubar-font-scale"
+          role="group"
+          aria-label="Schriftgröße der Anwendung"
+        >
+          <span className="menubar-font-scale-label" id="menubar-font-scale-label">
+            Schrift
+          </span>
+          <button
+            type="button"
+            aria-label="Schrift verkleinern"
+            aria-describedby="menubar-font-scale-label"
+            disabled={fontScaleDecDisabled}
+            onClick={onFontScaleDec}
+          >
+            −
+          </button>
+          <span className="menubar-font-scale-value" aria-live="polite">
+            {Math.round(fontScale * 100)}%
+          </span>
+          <button
+            type="button"
+            aria-label="Schrift vergrößern"
+            aria-describedby="menubar-font-scale-label"
+            disabled={fontScaleIncDisabled}
+            onClick={onFontScaleInc}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="menubar-font-scale-reset"
+            aria-label="Schriftgröße auf Standard zurücksetzen"
+            disabled={fontScale === 1}
+            onClick={onFontScaleReset}
+            title="Standard (100 %)"
+          >
+            Std.
+          </button>
+        </div>
+        {infoMessage ? (
+          <span className="menubar-info" role="status" aria-live="polite">
+            {infoMessage}
+          </span>
+        ) : null}
+      </div>
     </nav>
   );
 }

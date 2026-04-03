@@ -137,6 +137,8 @@ export type ExportTracksCallbacks = {
    * `deriveExportProjectFolderName` aus EDL-/Playlist-Dateiname oder Titel.
    */
   projectFolderName?: string;
+  /** Nur diese Playlist-Indizes exportieren (z. B. nur „offline“ ohne Eintrag in der Musikdatenbank). */
+  onlyIndices?: Set<number>;
 };
 
 export type ExportTracksResult = {
@@ -152,7 +154,7 @@ export type ExportTracksResult = {
 export async function exportFakeTracksToTracksFolder(
   playlist: PlaylistEntry[],
   tracksDir: FileSystemDirectoryHandle,
-  { onDuplicate, getTagsForIndex, projectFolderName }: ExportTracksCallbacks
+  { onDuplicate, getTagsForIndex, projectFolderName, onlyIndices }: ExportTracksCallbacks
 ): Promise<ExportTracksResult> {
   const updates: { index: number; linkedTrackFileName: string }[] = [];
   const identicalChoiceIndices: number[] = [];
@@ -173,11 +175,21 @@ export async function exportFakeTracksToTracksFolder(
     existingMp3Paths.map((p) => basenamePath(p).toLowerCase())
   );
 
+  const stemToPathThisExport = new Map<string, string>();
+
   for (let index = 0; index < playlist.length; index++) {
+    if (onlyIndices && !onlyIndices.has(index)) continue;
+
     const row = playlist[index];
     const raw = row.linkedTrackFileName ?? row.title;
     const stem = sanitizeFilenameStem(stripExtension(raw));
     const proposedFileName = `${stem}.mp3`;
+
+    const reusedInThisExport = stemToPathThisExport.get(stem);
+    if (reusedInThisExport) {
+      updates.push({ index, linkedTrackFileName: reusedInThisExport });
+      continue;
+    }
 
     const conflict = findConflictingFile(stem, proposedFileName, existingMp3Paths);
 
@@ -217,6 +229,7 @@ export async function exportFakeTracksToTracksFolder(
       storedRelativePath = prefixRel ? `${prefixRel}${newBasename}` : newBasename;
     }
 
+    stemToPathThisExport.set(stem, storedRelativePath);
     updates.push({ index, linkedTrackFileName: storedRelativePath });
   }
 
@@ -255,7 +268,7 @@ async function nextFreeMp3NameShared(
 export async function exportFakeTracksToSharedStorage(
   playlist: PlaylistEntry[],
   sink: SharedFakeMp3Sink,
-  { onDuplicate, getTagsForIndex, projectFolderName }: ExportTracksCallbacks
+  { onDuplicate, getTagsForIndex, projectFolderName, onlyIndices }: ExportTracksCallbacks
 ): Promise<ExportTracksResult> {
   const updates: { index: number; linkedTrackFileName: string }[] = [];
   const identicalChoiceIndices: number[] = [];
@@ -267,16 +280,32 @@ export async function exportFakeTracksToSharedStorage(
 
   const prefixRel = folderStem ? `${folderStem}/` : "";
 
+  /**
+   * Nur Snapshot vor diesem Lauf — wie bei `exportFakeTracksToTracksFolder`.
+   * Nicht nach jedem Schreiben erweitern: sonst würde die nächste Playlist-Zeile
+   * die gerade erzeugte MP3 als „bereits vorhanden“ sehen und fälschlich den
+   * Duplikat-Dialog auslösen (Vergleich nur mit echter Musikdatenbank / Platte vor Transfer).
+   */
   const existingMp3Paths = await sink.listAllMp3RelativePaths();
   const usedBasenamesLower = new Set(
     existingMp3Paths.map((p) => basenamePath(p).toLowerCase())
   );
 
+  const stemToPathThisExport = new Map<string, string>();
+
   for (let index = 0; index < playlist.length; index++) {
+    if (onlyIndices && !onlyIndices.has(index)) continue;
+
     const row = playlist[index];
     const raw = row.linkedTrackFileName ?? row.title;
     const stem = sanitizeFilenameStem(stripExtension(raw));
     const proposedFileName = `${stem}.mp3`;
+
+    const reusedInThisExport = stemToPathThisExport.get(stem);
+    if (reusedInThisExport) {
+      updates.push({ index, linkedTrackFileName: reusedInThisExport });
+      continue;
+    }
 
     const conflict = findConflictingFile(stem, proposedFileName, existingMp3Paths);
 
@@ -307,7 +336,6 @@ export async function exportFakeTracksToSharedStorage(
         storedRelativePath = prefixRel ? `${prefixRel}${newBasename}` : newBasename;
         await sink.writeMp3Blob(storedRelativePath, blob);
         usedBasenamesLower.add(newBasename.toLowerCase());
-        existingMp3Paths.push(storedRelativePath);
       }
     } else {
       const newBasename = await nextFreeMp3NameShared(
@@ -324,9 +352,9 @@ export async function exportFakeTracksToSharedStorage(
       storedRelativePath = prefixRel ? `${prefixRel}${newBasename}` : newBasename;
       await sink.writeMp3Blob(storedRelativePath, blob);
       usedBasenamesLower.add(newBasename.toLowerCase());
-      existingMp3Paths.push(storedRelativePath);
     }
 
+    stemToPathThisExport.set(stem, storedRelativePath);
     updates.push({ index, linkedTrackFileName: storedRelativePath });
   }
 

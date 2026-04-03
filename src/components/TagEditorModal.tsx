@@ -7,12 +7,31 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { AUDIO_TAG_FIELD_LABELS, type AudioTags } from "../audio/audioTags";
-import type { GvlLabelEntry } from "../storage/gvlLabelStore";
+import {
+  findGvlEntryByLabelcode,
+  loadGvlLabelDb,
+  type GvlLabelDb,
+  type GvlLabelEntry,
+} from "../storage/gvlLabelStore";
 import { parseGemaOcrText } from "../audio/parseGemaOcrText";
+import { openAppleMusicWithOptionalClip, APPLE_MUSIC_SEARCH_URL } from "../appleMusicSearch";
 import {
   openP7S1MusikportalWithOptionalClip,
   P7S1_MUSIKPORTAL_TRACK_RESEARCH_URL,
 } from "../p7s1Musikportal";
+import {
+  openBmgPmSearchWithOptionalClipAsync,
+  BMGPM_SEARCH_URL,
+} from "../bmgProductionMusic";
+import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
+import {
+  looksLikeBmgPmMetadata,
+  parseBmgPmMetadataText,
+} from "../audio/parseBmgPmMetadataText";
+import {
+  looksLikeAppleMusicCreditsText,
+  parseAppleMusicCreditsText,
+} from "../audio/parseAppleMusicCreditsText";
 
 type TagFormFields = Record<Exclude<keyof AudioTags, "warnung">, string>;
 
@@ -24,6 +43,7 @@ function formFromMerged(t: AudioTags): TagFormFields {
     year: t.year ?? "",
     comment: t.comment ?? "",
     composer: t.composer ?? "",
+    isrc: t.isrc ?? "",
     labelcode: t.labelcode ?? "",
     label: t.label ?? "",
     hersteller: t.hersteller ?? "",
@@ -73,6 +93,11 @@ type Props = {
   p7SearchSource?: string | null;
   /** Zeile aus GVL-Tabelle → Tag-Felder überschreiben (id wechselt pro Klick). */
   gvlApplyFromDb?: GvlApplyFromDbPayload | null;
+  /**
+   * Aktuelle GVL-Liste (wie in den Systemeinstellungen); für OCR-Import per Labelcode.
+   * Wenn nicht gesetzt, wird nur localStorage gelesen (kann hinter IndexedDB zurückliegen).
+   */
+  gvlLabelDb?: GvlLabelDb | null;
   /** Nur Administratoren: GVL-Datenbank unter „Verwaltung“. */
   showGvlDatabaseButton?: boolean;
   onOpenGvlDatabase: () => void;
@@ -86,6 +111,7 @@ export function TagEditorModal({
   initial,
   p7SearchSource = null,
   gvlApplyFromDb = null,
+  gvlLabelDb = null,
   showGvlDatabaseButton = true,
   onOpenGvlDatabase,
   onClose,
@@ -191,12 +217,30 @@ export function TagEditorModal({
   };
 
   const applyPastedOcr = () => {
-    const { fields, extraCommentLines } = parseGemaOcrText(pasteDraft);
+    const { fields, extraCommentLines } = looksLikeBmgPmMetadata(pasteDraft)
+      ? parseBmgPmMetadataText(pasteDraft)
+      : looksLikeAppleMusicCreditsText(pasteDraft)
+        ? parseAppleMusicCreditsText(pasteDraft)
+        : parseGemaOcrText(pasteDraft);
+    let mergedFields: Partial<AudioTags> = { ...fields };
+    const lc = mergedFields.labelcode?.trim();
+    if (lc) {
+      const db = gvlLabelDb ?? loadGvlLabelDb();
+      const entry = findGvlEntryByLabelcode(db, lc);
+      if (entry) {
+        mergedFields = {
+          ...mergedFields,
+          label: entry.label,
+          hersteller: entry.hersteller,
+          gvlRechte: entry.rechterueckrufe,
+        };
+      }
+    }
     const extraBlock = extraCommentLines.join("\n").trim();
     setForm((prev) => {
       const next = { ...prev };
-      for (const k of Object.keys(fields) as (keyof TagFormFields)[]) {
-        const v = fields[k];
+      for (const k of Object.keys(mergedFields) as (keyof TagFormFields)[]) {
+        const v = mergedFields[k];
         if (typeof v !== "string" || !v.trim()) continue;
         const cur = (next[k] ?? "").trim();
         if (overwriteParsed || !cur) {
@@ -256,11 +300,21 @@ export function TagEditorModal({
           </div>
         ) : null}
         <div className="tag-import-block">
-          <div className="tag-import-heading">Text aus GEMA / Google Lens</div>
+          <div className="tag-import-heading">Text aus GEMA / Google Lens / BMG PM / Apple Music</div>
           <p className="tag-import-hint">
-            OCR-Text einfügen (TITEL, CD, JAHR, …). Bei LABEL/VERLAG: Text vor dem ersten{" "}
-            <code>/</code> → Label, alles danach → Hersteller (Verlag); ein{" "}
-            <code>(LC …)</code> direkt hinter dem Verlag wird entfernt.
+            <strong>Apple Music</strong> (Seite kopieren): aus „Komposition und Liedtext“ werden
+            Komponist:innen/Songwriter:innen als Namen erkannt (Rollen- und Länderzeilen entfallen) und
+            im Feld Komponist mit Komma gesetzt; einzeilige Kopfzeilen mit{" "}
+            <code>=Songtitel</code>, <code>= Albumtitel</code>, <code>= Interpret</code> werden
+            übernommen, wenn vorhanden. <strong>GEMA-Zeilen</strong> (TITEL, CD, JAHR, …): bei
+            LABEL/VERLAG Text vor dem ersten{" "}
+            <code>/</code> → Label, danach → Hersteller; <code>(LC …)</code> am Verlagsende wird entfernt.{" "}
+            <strong>Google-Lens-Liste</strong> mit <code>Titel:</code>, <code>Composer:</code>,{" "}
+            <code>Album:</code>, <code>Label Code:</code>, <code>ISRC:</code> usw.: gleiches Feld — bei
+            erkanntem Labelcode werden Label, Hersteller und Rechterückruf aus der importierten GVL-Liste
+            ergänzt (falls passend). <strong>BMG Production Music</strong> (Block mit{" "}
+            <code>Album Code:</code>, <code>Track Title:</code>, …): Album aus Code + Titel, Label-Zeile
+            wird nicht übernommen.
           </p>
           <textarea
             className="tag-import-textarea"
@@ -320,6 +374,10 @@ export function TagEditorModal({
             </label>
           </div>
           <label className="tag-field">
+            <span>ISRC</span>
+            <input type="text" value={form.isrc} onChange={set("isrc")} autoComplete="off" />
+          </label>
+          <label className="tag-field">
             <span>Labelcode</span>
             <input type="text" value={form.labelcode} onChange={set("labelcode")} autoComplete="off" />
           </label>
@@ -340,11 +398,51 @@ export function TagEditorModal({
           <div className="modal-actions--tag-left">
             <button
               type="button"
-              className="btn-modal"
+              className="btn-modal btn-modal--tag-portal"
+              aria-label="P7S1 Musikportal"
               title={`${P7S1_MUSIKPORTAL_TRACK_RESEARCH_URL} — kopiert zugleich den Suchbegriff (Dateiname bis zum ersten _) in die Zwischenablage.`}
               onClick={() => openP7S1MusikportalWithOptionalClip(p7SearchSource)}
             >
-              P7S1_Musikportal
+              <img
+                src="/P7S1.png"
+                alt=""
+                className="btn-tag-portal-icon btn-tag-portal-icon--p7"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = "/p7s1.svg";
+                }}
+              />
+            </button>
+            <button
+              type="button"
+              className="btn-modal btn-modal--tag-portal"
+              aria-label="Apple Music"
+              title={`${APPLE_MUSIC_SEARCH_URL} — Suchbegriff: nach erstem „/“ nur Dateiname; mit _ alles danach, ohne _ dann ganzer Name — Bindestriche/Unterstriche als Leerzeichen; gleicher Text in Zwischenablage und Suche.`}
+              onClick={() => openAppleMusicWithOptionalClip(p7SearchSource)}
+            >
+              <img
+                src="/apple-logo.png"
+                alt=""
+                className="btn-tag-portal-icon btn-tag-portal-icon--apple"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = "/apple-logo.svg";
+                }}
+              />
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              title={`${UPM_SEARCH_URL} — bei Dateinamen mit Präfix UPM_: Katalogteil (z. B. ESW2878_17) in die Zwischenablage und Such-URL mit searchString.`}
+              onClick={() => void openUpmSearchWithOptionalClipAsync(p7SearchSource)}
+            >
+              UPM-Suche
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              title={`${BMGPM_SEARCH_URL} — bei BMGPM_: Kennung nach dem ersten Unterstrich + erstes Wort des Titels (nach dem 3. Unterstrich) in die Zwischenablage, z. B. „LKY0123 RISE“.`}
+              onClick={() => void openBmgPmSearchWithOptionalClipAsync(p7SearchSource)}
+            >
+              BMGPM-Suche
             </button>
             {showGvlDatabaseButton ? (
               <button

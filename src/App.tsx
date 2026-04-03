@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
@@ -37,6 +38,7 @@ import {
   LEGACY_PLAYLIST_LIBRARY_FILE_EXT,
   parsePlaylistLibraryFile,
   PLAYLIST_LIBRARY_FILE_EXT,
+  sameLibraryPlaylistDocumentName,
   serializePlaylistLibraryFile,
 } from "./edl/playlistLibraryFile";
 import { parseEdl } from "./edl/parseEdl";
@@ -44,9 +46,12 @@ import { eventsToMergedPlaylist } from "./edl/mergePlaylist";
 import { playlistDurationTimecode } from "./edl/timecode";
 import type { PlaylistEntry } from "./edl/types";
 import {
+  collectTagStoreKeysForRemovedMusicPaths,
   fileTagKey,
   loadTagStore,
   loadTagStoreFromIdb,
+  playlistEntryTagStoreKey,
+  playlistRowTagOverlay,
   playlistTagKey,
   saveTagStore,
   type TagStore,
@@ -64,9 +69,13 @@ import {
 } from "./storage/gvlLabelStore";
 import { setUsersApiToken } from "./api/authToken";
 import {
+  apiSharedGvlLabelDbFetch,
+  apiSharedGvlLabelDbSave,
   apiSharedMusicDbFetch,
   apiSharedMusicDbRegister,
   apiSharedMusicDbRemovePaths,
+  apiSharedMusicDbTouchTagEdited,
+  type MusicDbFileMeta,
   apiSharedTracksExists,
   apiSharedTracksReadBinary,
   apiSharedTracksWriteBinary,
@@ -75,6 +84,15 @@ import { fetchUsersList } from "./api/usersApi";
 import type { AppUserRecord } from "./storage/appUsersStorage";
 import { displayName } from "./storage/appUsersStorage";
 import { clearWorkspace, loadWorkspace, saveWorkspace } from "./storage/workspaceStorage";
+import {
+  clampFontScale,
+  FONT_SCALE_DEFAULT,
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
+  FONT_SCALE_STEP,
+  loadFontScale,
+  saveFontScale,
+} from "./storage/fontScaleStorage";
 import { writeAudioTagsToSharedMp3 } from "./audio/writeAudioTagsToSharedMp3";
 import { deleteMp3FilesFromSharedStorage } from "./tracks/deleteMp3FromSharedStorage";
 import {
@@ -101,16 +119,34 @@ import {
 } from "./p7s1Musikportal";
 import { startColumnResizeDrag } from "./tableColResizeDrag";
 import {
-  defaultEdlColumnWidths,
-  defaultMp3ColumnWidths,
-  edlResizeMinForIndex,
-  mp3ResizeMinForIndex,
-} from "./tableColumnLayout";
+  defaultMp3ColumnWidthsById,
+  emptyMp3FiltersRecord,
+  getMp3ColumnLabel,
+  loadMp3TableLayout,
+  mp3ResizeMinForColumnId,
+  MP3_TABLE_ALL_COLUMN_IDS,
+  reorderMp3Columns,
+  saveMp3TableLayout,
+  type Mp3TableColumnId,
+} from "./mp3TableLayout";
 import {
-  buildEdlRowCellStrings,
-  buildMp3RowCellStrings,
+  defaultEdlColumnWidthsById,
+  emptyEdlFiltersRecord,
+  getEdlColumnLabel,
+  loadEdlTableLayout,
+  edlResizeMinForColumnId,
+  EDL_TABLE_ALL_COLUMN_IDS,
+  reorderEdlColumns,
+  saveEdlTableLayout,
+  type EdlTableColumnId,
+} from "./edlTableLayout";
+import { compareSortableStrings, type SortDirection } from "./tableColumnSort";
+import {
+  buildEdlRowCellsMap,
+  buildMp3RowCellsMap,
+  formatMusicDbTimestamp,
   formatMusicDbTrackNumber,
-  hasActiveColumnFilters,
+  hasActiveColumnFiltersRecord,
   matchesColumnFilters,
 } from "./tableFilters";
 import { isGemaXlsFileName, parseGemaXls } from "./gema/parseGemaXls";
@@ -132,8 +168,88 @@ const TRANSFER_TO_MP3_TOOLTIP =
   FAKE_MP3_TOOLTIP +
   " Ist mp3 vorhanden, wird Datensatz verknüpft.";
 
-const EDL_FILTER_COL_COUNT = 6 + AUDIO_TAG_TABLE_COLUMN_KEYS.length;
-const MP3_FILTER_COL_COUNT = 2 + AUDIO_TAG_TABLE_COLUMN_KEYS.length;
+const TRANSFER_OFFLINE_MP3_TOOLTIP =
+  "Nur für weiß markierte Zeilen: Verknüpfung aus der Playlist, aber keine MP3 in der Musikdatenbank (z. B. nach Löschen). " +
+  "Legt dafür Platzhalter-MP3s auf dem Server an; die Markierung verschwindet, sobald die Einträge in der Musikdatenbank sind.";
+
+const MP3_COL_DRAG_MIME = "application/x-mp3-col-id";
+const EDL_COL_DRAG_MIME = "application/x-edl-col-id";
+
+function initialMp3TableLayoutState() {
+  return loadMp3TableLayout();
+}
+
+function initialEdlTableLayoutState() {
+  return loadEdlTableLayout();
+}
+
+function isMp3TagColumnId(id: Mp3TableColumnId): id is (typeof AUDIO_TAG_TABLE_COLUMN_KEYS)[number] {
+  return (AUDIO_TAG_TABLE_COLUMN_KEYS as readonly string[]).includes(id);
+}
+
+function mp3DataCellClass(colId: Mp3TableColumnId): string {
+  if (colId === "num") return "tc table-td-resizable mono-cell";
+  if (colId === "filename") return "mono-cell table-td-resizable";
+  if (colId === "created" || colId === "edited") return "table-td-resizable";
+  return "td-tag-field table-td-resizable";
+}
+
+function renderMp3DataCell(
+  colId: Mp3TableColumnId,
+  name: string,
+  merged: AudioTags,
+  catNo: number,
+  rowMeta: { createdAt?: string; updatedAt?: string } | undefined
+): ReactNode {
+  switch (colId) {
+    case "num":
+      return formatMusicDbTrackNumber(catNo);
+    case "filename":
+      return name;
+    case "created":
+      return formatMusicDbTimestamp(rowMeta?.createdAt);
+    case "edited":
+      return formatMusicDbTimestamp(rowMeta?.updatedAt);
+    default:
+      return isMp3TagColumnId(colId) ? tagCellText(merged, colId) : "";
+  }
+}
+
+function isEdlTagColumnId(id: EdlTableColumnId): id is (typeof AUDIO_TAG_TABLE_COLUMN_KEYS)[number] {
+  return (AUDIO_TAG_TABLE_COLUMN_KEYS as readonly string[]).includes(id);
+}
+
+function edlDataCellClass(colId: EdlTableColumnId): string {
+  if (colId === "num") return "tc table-td-resizable";
+  if (colId === "track") return "track table-td-resizable";
+  if (colId === "tcIn" || colId === "tcOut" || colId === "duration") return "tc table-td-resizable";
+  if (colId === "title") return "table-td-resizable";
+  return "td-tag-field table-td-resizable";
+}
+
+function renderEdlDataCell(
+  colId: EdlTableColumnId,
+  row: PlaylistEntry,
+  rowIndex: number,
+  merged: AudioTags
+): ReactNode {
+  switch (colId) {
+    case "num":
+      return rowIndex + 1;
+    case "track":
+      return row.track;
+    case "tcIn":
+      return row.recIn;
+    case "tcOut":
+      return row.recOut;
+    case "duration":
+      return playlistDurationTimecode(row.recInFrames, row.recOutFrames);
+    case "title":
+      return row.linkedTrackFileName ?? row.title;
+    default:
+      return isEdlTagColumnId(colId) ? tagCellText(merged, colId) : "";
+  }
+}
 
 /** Vertikaler Split EDL vs. Musikdatenbank (Anteil obere Pane); untere Pane = 1 − Wert. */
 const SPLIT_TOP_FRAC_MIN = 0;
@@ -215,6 +331,10 @@ function ColumnFilterTh({
   onFilterChange,
   onClearFilter,
   ariaLabelFilter,
+  columnDrag,
+  onHideColumn,
+  hideColumnDisabled,
+  columnSort,
 }: {
   colIndex: number;
   attachResize: (colIndex: number) => (e: ReactMouseEvent) => void;
@@ -225,16 +345,101 @@ function ColumnFilterTh({
   onFilterChange: (value: string) => void;
   onClearFilter: () => void;
   ariaLabelFilter: string;
+  columnDrag?: {
+    columnId: string;
+    onDragStart: (e: ReactDragEvent) => void;
+    onDragOver: (e: ReactDragEvent) => void;
+    onDrop: (e: ReactDragEvent) => void;
+    onDragEnd: (e: ReactDragEvent) => void;
+  };
+  onHideColumn?: () => void;
+  hideColumnDisabled?: boolean;
+  columnSort?: {
+    activeDirection: "asc" | "desc" | null;
+    onSortAsc: () => void;
+    onSortDesc: () => void;
+  };
 }) {
   const hasFilter = filterValue.trim().length > 0;
   return (
     <th
-      className={`table-th-resizable table-th-with-filter${className ? ` ${className}` : ""}`}
+      className={`table-th-resizable table-th-with-filter${className ? ` ${className}` : ""}${
+        columnDrag ? " table-th-col-dnd" : ""
+      }`}
       scope="col"
       title={title}
+      onDragOver={
+        columnDrag
+          ? (e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              columnDrag.onDragOver(e);
+            }
+          : undefined
+      }
+      onDrop={columnDrag?.onDrop}
     >
       <div className="table-th-head-row">
+        {columnDrag && (
+          <span
+            className="table-th-col-drag-handle"
+            draggable
+            onDragStart={columnDrag.onDragStart}
+            onDragEnd={columnDrag.onDragEnd}
+            title="Ziehen zum Umsortieren"
+            aria-hidden
+          >
+            ⠿
+          </span>
+        )}
         <span className="table-th-text">{label}</span>
+        {columnSort && (
+          <span className="table-th-sort-btns" role="group" aria-label="Sortierung">
+            <button
+              type="button"
+              className={`table-th-sort-btn${
+                columnSort.activeDirection === "asc" ? " table-th-sort-btn--active" : ""
+              }`}
+              title="Aufsteigend (A–Z)"
+              aria-label="Aufsteigend sortieren"
+              onClick={(e) => {
+                e.stopPropagation();
+                columnSort.onSortAsc();
+              }}
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              className={`table-th-sort-btn${
+                columnSort.activeDirection === "desc" ? " table-th-sort-btn--active" : ""
+              }`}
+              title="Absteigend (Z–A)"
+              aria-label="Absteigend sortieren"
+              onClick={(e) => {
+                e.stopPropagation();
+                columnSort.onSortDesc();
+              }}
+            >
+              ▼
+            </button>
+          </span>
+        )}
+        {onHideColumn && (
+          <button
+            type="button"
+            className="table-th-col-hide"
+            disabled={hideColumnDisabled}
+            title={hideColumnDisabled ? "Mindestens eine Spalte muss sichtbar bleiben." : "Spalte ausblenden"}
+            aria-label={`Spalte ${typeof label === "string" ? label : ""} ausblenden`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onHideColumn();
+            }}
+          >
+            −
+          </button>
+        )}
         {hasFilter && (
           <button
             type="button"
@@ -281,6 +486,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [musicDbFileNames, setMusicDbFileNames] = useState<string[]>([]);
+  const [musicDbMetadata, setMusicDbMetadata] = useState<Record<string, MusicDbFileMeta>>({});
   const [highlightMp3Name, setHighlightMp3Name] = useState<string | null>(null);
   const mp3RowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
   const [drag, setDrag] = useState(false);
@@ -331,6 +537,7 @@ export default function App() {
   const [windowInnerHeight, setWindowInnerHeight] = useState(() =>
     typeof window !== "undefined" ? window.innerHeight : 800
   );
+  const [fontScale, setFontScale] = useState(() => loadFontScale());
   /** Entspricht `calc(100vh - 9.5rem)` wie bisher — Basis für EDL-/MP3-Höhen ohne Zusatz. */
   const splitBaseHeightPx = useMemo(() => {
     const rem =
@@ -338,7 +545,7 @@ export default function App() {
         ? parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
         : 16;
     return Math.max(240, windowInnerHeight - 9.5 * rem);
-  }, [windowInnerHeight]);
+  }, [windowInnerHeight, fontScale]);
   /** Zusätzliche Höhe nur für die Musikdatenbank (nach unten; Seite wird länger). */
   const [mp3ExtraBottomPx, setMp3ExtraBottomPx] = useState(0);
   const mp3BottomDragRef = useRef<{ y: number; extra: number } | null>(null);
@@ -347,16 +554,42 @@ export default function App() {
   /** `null` = Import/EDL-Speichern in die EDL-Wurzel; sonst Unterordner-Pfad. */
   const [edlImportTargetSegments, setEdlImportTargetSegments] = useState<string[] | null>(null);
   const [importOverlay, setImportOverlay] = useState<ImportOverlayState | null>(null);
-  const [edlColWidths, setEdlColWidths] = useState<number[]>(defaultEdlColumnWidths);
-  const [mp3ColWidths, setMp3ColWidths] = useState<number[]>(defaultMp3ColumnWidths);
-  const edlColWidthsRef = useRef(edlColWidths);
-  const mp3ColWidthsRef = useRef(mp3ColWidths);
-  edlColWidthsRef.current = edlColWidths;
-  mp3ColWidthsRef.current = mp3ColWidths;
+  const edlLayoutInitRef = useRef<ReturnType<typeof loadEdlTableLayout> | null>(null);
+  if (edlLayoutInitRef.current === null) edlLayoutInitRef.current = initialEdlTableLayoutState();
+  const [edlColumnOrder, setEdlColumnOrder] = useState<EdlTableColumnId[]>(
+    () => edlLayoutInitRef.current!.order
+  );
+  const [edlColumnHidden, setEdlColumnHidden] = useState<Set<EdlTableColumnId>>(
+    () => new Set(edlLayoutInitRef.current!.hidden)
+  );
+  const [edlColWidthsById, setEdlColWidthsById] = useState<Record<EdlTableColumnId, number>>(
+    () => edlLayoutInitRef.current!.widths
+  );
+  const mp3LayoutInitRef = useRef<ReturnType<typeof loadMp3TableLayout> | null>(null);
+  if (mp3LayoutInitRef.current === null) mp3LayoutInitRef.current = initialMp3TableLayoutState();
+  const [mp3ColumnOrder, setMp3ColumnOrder] = useState<Mp3TableColumnId[]>(
+    () => mp3LayoutInitRef.current!.order
+  );
+  const [mp3ColumnHidden, setMp3ColumnHidden] = useState<Set<Mp3TableColumnId>>(
+    () => new Set(mp3LayoutInitRef.current!.hidden)
+  );
+  const [mp3ColWidthsById, setMp3ColWidthsById] = useState<Record<Mp3TableColumnId, number>>(
+    () => mp3LayoutInitRef.current!.widths
+  );
+  const edlColWidthsRef = useRef<number[]>([]);
+  const mp3ColWidthsRef = useRef<number[]>([]);
   const edlColGroupRef = useRef<HTMLTableColElement | null>(null);
   const mp3ColGroupRef = useRef<HTMLTableColElement | null>(null);
-  const [edlFilters, setEdlFilters] = useState<string[]>(() => Array(EDL_FILTER_COL_COUNT).fill(""));
-  const [mp3Filters, setMp3Filters] = useState<string[]>(() => Array(MP3_FILTER_COL_COUNT).fill(""));
+  const [edlFilters, setEdlFilters] = useState<Record<EdlTableColumnId, string>>(emptyEdlFiltersRecord);
+  const [mp3Filters, setMp3Filters] = useState<Record<Mp3TableColumnId, string>>(emptyMp3FiltersRecord);
+  const [mp3Sort, setMp3Sort] = useState<{
+    columnId: Mp3TableColumnId;
+    direction: SortDirection;
+  } | null>(null);
+  const [edlSort, setEdlSort] = useState<{
+    columnId: EdlTableColumnId;
+    direction: SortDirection;
+  } | null>(null);
   /** Mehrfachauswahl EDL-Liste: Zeilenindizes in `playlist` (0-basiert). */
   const [edlSelectedRowIndices, setEdlSelectedRowIndices] = useState<Set<number>>(() => new Set());
   /** Anker für Shift-Bereich: Zeilenindex in `playlist` (wie bei Auswahl). */
@@ -385,12 +618,39 @@ export default function App() {
 
   const isAdmin = currentUser?.role === "admin";
 
+  useEffect(() => {
+    document.documentElement.style.setProperty("--app-font-scale", String(fontScale));
+    saveFontScale(fontScale);
+  }, [fontScale]);
+
+  const bumpFontScale = useCallback((delta: number) => {
+    setFontScale((prev) => clampFontScale(prev + delta));
+  }, []);
+
+  const onFontScaleDec = useCallback(() => {
+    bumpFontScale(-FONT_SCALE_STEP);
+  }, [bumpFontScale]);
+
+  const onFontScaleInc = useCallback(() => {
+    bumpFontScale(FONT_SCALE_STEP);
+  }, [bumpFontScale]);
+
+  const onFontScaleReset = useCallback(() => {
+    setFontScale(FONT_SCALE_DEFAULT);
+  }, []);
+
+  const fontScaleDecDisabled = fontScale <= FONT_SCALE_MIN;
+  const fontScaleIncDisabled = fontScale >= FONT_SCALE_MAX;
+
   const refreshMusicDbFromServer = useCallback(async () => {
     try {
-      const paths = await apiSharedMusicDbFetch();
-      setMusicDbFileNames(paths);
+      const state = await apiSharedMusicDbFetch();
+      setMusicDbFileNames(state.paths);
+      setMusicDbMetadata(state.metadata);
+      return state;
     } catch {
       /* Session / Netzwerk */
+      return null;
     }
   }, []);
 
@@ -427,6 +687,7 @@ export default function App() {
     setLoadedLibraryFile(null);
     setEdlImportTargetSegments(null);
     setMusicDbFileNames([]);
+    setMusicDbMetadata({});
     setTagStore({});
     setError(null);
   }, []);
@@ -483,29 +744,9 @@ export default function App() {
   }, [fileName]);
 
   useEffect(() => {
-    if (!sessionUserId || !playlist?.length) return;
-    const fromPl = playlist.map((r) => r.linkedTrackFileName).filter(Boolean) as string[];
-    if (fromPl.length === 0) return;
-    setMusicDbFileNames((prev) => {
-      const s = new Set(prev);
-      const newOnes: string[] = [];
-      for (const n of fromPl) {
-        if (!s.has(n)) {
-          s.add(n);
-          newOnes.push(n);
-        }
-      }
-      if (newOnes.length === 0) return prev;
-      void apiSharedMusicDbRegister(newOnes)
-        .then((merged) => setMusicDbFileNames(merged))
-        .catch(() => {});
-      return [...s].sort((a, b) => a.localeCompare(b, "de"));
-    });
-  }, [playlist, sessionUserId]);
-
-  useEffect(() => {
     if (!sessionUserId) {
       setMusicDbFileNames([]);
+      setMusicDbMetadata({});
       return;
     }
     let cancelled = false;
@@ -515,15 +756,22 @@ export default function App() {
         if (legacy.length > 0) {
           const merged = await apiSharedMusicDbRegister(legacy);
           if (!cancelled) {
-            setMusicDbFileNames(merged);
+            setMusicDbFileNames(merged.paths);
+            setMusicDbMetadata(merged.metadata);
             saveMusicDatabaseFileNames([]);
           }
         } else {
-          const paths = await apiSharedMusicDbFetch();
-          if (!cancelled) setMusicDbFileNames(paths);
+          const state = await apiSharedMusicDbFetch();
+          if (!cancelled) {
+            setMusicDbFileNames(state.paths);
+            setMusicDbMetadata(state.metadata);
+          }
         }
       } catch {
-        if (!cancelled) setMusicDbFileNames(legacy.length > 0 ? legacy : []);
+        if (!cancelled) {
+          setMusicDbFileNames(legacy.length > 0 ? legacy : []);
+          setMusicDbMetadata({});
+        }
       }
     })();
     return () => {
@@ -538,16 +786,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const d = defaultMp3ColumnWidths();
-    setMp3ColWidths((w) => {
-      if (w.length === d.length) return w;
-      return d.map((dw, i) => (typeof w[i] === "number" ? w[i] : dw));
-    });
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
     (async () => {
+      if (sessionUserId) {
+        try {
+          const serverDb = await apiSharedGvlLabelDbFetch();
+          if (cancelled) return;
+          if (serverDb && serverDb.entries.length > 0) {
+            setGvlLabelDb(serverDb);
+            saveGvlLabelDb(serverDb);
+            return;
+          }
+        } catch {
+          /* Offline oder API nicht erreichbar: lokalen Cache behalten */
+        }
+      }
       if (loadGvlLabelDb()) return;
       const fromIdb = await loadGvlLabelDbFromIdb();
       if (cancelled || !fromIdb) return;
@@ -557,7 +810,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionUserId]);
 
   /** Erhöht die Chance, dass IndexedDB/Handles nicht so aggressiv verworfen werden (Browser-abhängig). */
   useEffect(() => {
@@ -775,11 +1028,13 @@ export default function App() {
         if (loadedLibraryFile) {
           const { parentSegments: p, fileName: fn } = loadedLibraryFile;
           return (
-            info.fileName === fn &&
-            JSON.stringify(info.parentSegments) === JSON.stringify(p)
+            JSON.stringify(info.parentSegments) === JSON.stringify(p) &&
+            sameLibraryPlaylistDocumentName(fn, info.fileName)
           );
         }
-        return fileName !== null && info.fileName === fileName;
+        return (
+          fileName !== null && sameLibraryPlaylistDocumentName(info.fileName, fileName)
+        );
       }
       if (!loadedLibraryFile) return false;
       const { parentSegments: p } = loadedLibraryFile;
@@ -802,13 +1057,13 @@ export default function App() {
       if (info.kind === "file") {
         const matchesLibraryOpen =
           loadedLibraryFile !== null &&
-          info.fileName === loadedLibraryFile.fileName &&
           JSON.stringify(info.parentSegments) ===
-            JSON.stringify(loadedLibraryFile.parentSegments);
+            JSON.stringify(loadedLibraryFile.parentSegments) &&
+          sameLibraryPlaylistDocumentName(info.fileName, loadedLibraryFile.fileName);
         const matchesDisplayedName =
           loadedLibraryFile === null &&
           fileName !== null &&
-          info.fileName === fileName;
+          sameLibraryPlaylistDocumentName(info.fileName, fileName);
         if (matchesLibraryOpen || matchesDisplayedName) {
           void clearEdlWorkspace();
         }
@@ -926,7 +1181,6 @@ export default function App() {
         try {
           const row = playlist[index];
           const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
-          const key = playlistTagKey(row.id);
           let id3: AudioTags = {};
           const linked = row.linkedTrackFileName;
           if (sessionUserId && linked && isMp3FileName(linked)) {
@@ -938,7 +1192,10 @@ export default function App() {
               /* Datei fehlt oder kein Lesen */
             }
           }
-          const merged = mergeAudioTags(mergeAudioTags(base, tagStore[key]), id3);
+          const merged = mergeAudioTags(
+            mergeAudioTags(base, playlistRowTagOverlay(row, tagStore)),
+            id3
+          );
           setTagEditInitial(merged);
           setTagModal({ kind: "playlist", index });
         } finally {
@@ -956,7 +1213,9 @@ export default function App() {
         try {
           const base = defaultTagsFromPlaylistTitle(fileName);
           const row = playlist?.find((r) => r.linkedTrackFileName === fileName);
-          const key = row ? playlistTagKey(row.id) : fileTagKey(fileName);
+          const overlay = row
+            ? playlistRowTagOverlay(row, tagStore)
+            : tagStore[fileTagKey(fileName)] ?? {};
           let id3: AudioTags = {};
           if (sessionUserId && isMp3FileName(fileName)) {
             try {
@@ -967,7 +1226,7 @@ export default function App() {
               /* Datei fehlt oder kein Lesen */
             }
           }
-          const merged = mergeAudioTags(mergeAudioTags(base, tagStore[key]), id3);
+          const merged = mergeAudioTags(mergeAudioTags(base, overlay), id3);
           setTagEditInitial(merged);
           setTagModal({ kind: "file", fileName });
         } finally {
@@ -1000,7 +1259,7 @@ export default function App() {
         const row = playlist[tagModal.index];
         const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
         const overlay = overlayFromForm(base, form);
-        const key = playlistTagKey(row.id);
+        const key = playlistEntryTagStoreKey(row);
         const linked = row.linkedTrackFileName;
         if (sessionUserId && linked && isMp3FileName(linked)) {
           try {
@@ -1010,6 +1269,12 @@ export default function App() {
               linked,
               form
             );
+            try {
+              const entry = await apiSharedMusicDbTouchTagEdited(linked);
+              setMusicDbMetadata((prev) => ({ ...prev, [linked]: entry }));
+            } catch {
+              /* Zeitstempel optional */
+            }
           } catch (e) {
             setError(
               e instanceof Error
@@ -1023,13 +1288,15 @@ export default function App() {
           const next = { ...prev };
           if (Object.keys(overlay).length === 0) delete next[key];
           else next[key] = overlay;
+          if (linked?.trim()) {
+            delete next[playlistTagKey(row.id)];
+          }
           persistTagStore(next);
           return next;
         });
       } else {
         const base = defaultTagsFromPlaylistTitle(tagModal.fileName);
-        const row = playlist?.find((r) => r.linkedTrackFileName === tagModal.fileName);
-        const key = row ? playlistTagKey(row.id) : fileTagKey(tagModal.fileName);
+        const key = fileTagKey(tagModal.fileName);
         const overlay = overlayFromForm(base, form);
         if (sessionUserId && isMp3FileName(tagModal.fileName)) {
           try {
@@ -1039,6 +1306,12 @@ export default function App() {
               tagModal.fileName,
               form
             );
+            try {
+              const entry = await apiSharedMusicDbTouchTagEdited(tagModal.fileName);
+              setMusicDbMetadata((prev) => ({ ...prev, [tagModal.fileName]: entry }));
+            } catch {
+              /* Zeitstempel optional */
+            }
           } catch (e) {
             setError(
               e instanceof Error
@@ -1052,6 +1325,13 @@ export default function App() {
           const next = { ...prev };
           if (Object.keys(overlay).length === 0) delete next[key];
           else next[key] = overlay;
+          if (playlist) {
+            for (const r of playlist) {
+              if (r.linkedTrackFileName === tagModal.fileName) {
+                delete next[playlistTagKey(r.id)];
+              }
+            }
+          }
           persistTagStore(next);
           return next;
         });
@@ -1081,40 +1361,79 @@ export default function App() {
     setSystemSettingsOpen(false);
   }, []);
 
-  const onImportGvlDb = useCallback((nextDb: GvlLabelDb) => {
-    setGvlLabelDb(nextDb);
-    saveGvlLabelDb(nextDb);
-  }, []);
+  const onImportGvlDb = useCallback(
+    async (nextDb: GvlLabelDb) => {
+      setGvlLabelDb(nextDb);
+      saveGvlLabelDb(nextDb);
+      if (!sessionUserId || !isAdmin) return;
+      try {
+        await apiSharedGvlLabelDbSave(nextDb);
+      } catch (e) {
+        setError(
+          e instanceof Error
+            ? e.message
+            : "GVL-Daten konnten nicht auf dem Server gespeichert werden."
+        );
+      }
+    },
+    [sessionUserId, isAdmin]
+  );
 
-  const onExportFakeMp3s = useCallback(async () => {
-    if (!playlist?.length) return;
-    if (!sessionUserId) {
-      setError("Bitte anmelden, um Fake-MP3s auf dem Server zu speichern.");
-      return;
-    }
-    dupApplyAllRef.current = null;
-    setExportBusy(true);
-    setError(null);
-    try {
-      const projectFolderName = deriveExportProjectFolderName({
-        fileName,
-        edlTitle,
-        loadedLibraryFileName: loadedLibraryFile?.fileName ?? null,
-      });
-      const sink = createSharedFakeMp3Sink();
-      const { updates, identicalChoiceIndices } = await exportFakeTracksToSharedStorage(
-        playlist,
-        sink,
-        {
-          onDuplicate: askDuplicate,
-          projectFolderName,
-          getTagsForIndex: (index) => {
-            const row = playlist[index];
-            const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
-            return mergeAudioTags(base, tagStore[playlistTagKey(row.id)]);
-          },
+  const hasOfflinePlaylistRows = useMemo(() => {
+    if (!playlist?.length) return false;
+    return playlist.some((row) => {
+      const linked = row.linkedTrackFileName?.trim();
+      if (!linked || !isMp3FileName(linked)) return false;
+      return resolveMusicDbPathForBasename(musicDbFileNames, linked) === null;
+    });
+  }, [playlist, musicDbFileNames]);
+
+  const onExportFakeMp3s = useCallback(
+    async (options?: { onlyOffline?: boolean }) => {
+      if (!playlist?.length) return;
+      if (!sessionUserId) {
+        setError("Bitte anmelden, um Fake-MP3s auf dem Server zu speichern.");
+        return;
+      }
+      let onlyIndices: Set<number> | undefined;
+      if (options?.onlyOffline) {
+        onlyIndices = new Set<number>();
+        playlist.forEach((row, i) => {
+          const linked = row.linkedTrackFileName?.trim();
+          if (!linked || !isMp3FileName(linked)) return;
+          if (resolveMusicDbPathForBasename(musicDbFileNames, linked) === null) {
+            onlyIndices!.add(i);
+          }
+        });
+        if (onlyIndices.size === 0) {
+          setError("Keine weiß markierten Zeilen ohne Eintrag in der Musikdatenbank.");
+          return;
         }
-      );
+      }
+      dupApplyAllRef.current = null;
+      setExportBusy(true);
+      setError(null);
+      try {
+        const projectFolderName = deriveExportProjectFolderName({
+          fileName,
+          edlTitle,
+          loadedLibraryFileName: loadedLibraryFile?.fileName ?? null,
+        });
+        const sink = createSharedFakeMp3Sink();
+        const { updates, identicalChoiceIndices } = await exportFakeTracksToSharedStorage(
+          playlist,
+          sink,
+          {
+            onDuplicate: askDuplicate,
+            projectFolderName,
+            onlyIndices,
+            getTagsForIndex: (index) => {
+              const row = playlist[index];
+              const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+              return mergeAudioTags(base, playlistRowTagOverlay(row, tagStore));
+            },
+          }
+        );
       const mergedPlaylist = playlist.map((row, i) => {
         const u = updates.find((x) => x.index === i);
         if (!u) return row;
@@ -1136,7 +1455,7 @@ export default function App() {
         const fileFull = mergeAudioTags(fileBase, fileOverlay);
         const playlistBase = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
         playlistTagCopiesFromDb.push({
-          key: playlistTagKey(row.id),
+          key: fileTagKey(storedName),
           overlay: overlayFromForm(playlistBase, fileFull),
         });
       }
@@ -1211,33 +1530,54 @@ export default function App() {
           );
         }
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Export fehlgeschlagen.");
-    } finally {
-      setExportBusy(false);
-    }
-  }, [
-    playlist,
-    sessionUserId,
-    askDuplicate,
-    tagStore,
-    musicDbFileNames,
-    edlLibraryAccess,
-    loadedLibraryFile,
-    edlTitle,
-    fileName,
-    persistTagStore,
-    refreshMusicDbFromServer,
-  ]);
+      if (fileName?.toLowerCase().endsWith(".edl")) {
+        const plName = edlFileNameToPlaylistFileName(fileName);
+        setFileName(plName);
+        setLoadedLibraryFile((prev) => {
+          if (
+            prev &&
+            prev.kind === "edl" &&
+            prev.fileName.toLowerCase() === fileName.toLowerCase()
+          ) {
+            return { ...prev, fileName: plName, kind: "playlist" };
+          }
+          return prev;
+        });
+      }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Export fehlgeschlagen.");
+      } finally {
+        setExportBusy(false);
+      }
+    },
+    [
+      playlist,
+      sessionUserId,
+      askDuplicate,
+      tagStore,
+      musicDbFileNames,
+      edlLibraryAccess,
+      loadedLibraryFile,
+      edlTitle,
+      fileName,
+      persistTagStore,
+      refreshMusicDbFromServer,
+    ]
+  );
 
   const requestExportFakeMp3s = useCallback(() => {
     if (!playlist?.length || exportBusy) return;
-    if (fileName && isPlaylistLibraryFileName(fileName)) {
+    if (fileName && isPlaylistLibraryFileName(fileName) && !hasOfflinePlaylistRows) {
       setTransferListConfirmOpen(true);
       return;
     }
     void onExportFakeMp3s();
-  }, [playlist, exportBusy, fileName, onExportFakeMp3s]);
+  }, [playlist, exportBusy, fileName, onExportFakeMp3s, hasOfflinePlaylistRows]);
+
+  const requestOfflineExportFakeMp3s = useCallback(() => {
+    if (!playlist?.length || exportBusy) return;
+    void onExportFakeMp3s({ onlyOffline: true });
+  }, [playlist, exportBusy, onExportFakeMp3s]);
 
   const mp3KnownFromPlaylist = useMemo(() => musicDbFileNames, [musicDbFileNames]);
 
@@ -1246,6 +1586,101 @@ export default function App() {
     mp3KnownFromPlaylist.forEach((name, i) => m.set(name, i + 1));
     return m;
   }, [mp3KnownFromPlaylist]);
+
+  const mp3VisibleColumnIds = useMemo(
+    () => mp3ColumnOrder.filter((id) => !mp3ColumnHidden.has(id)),
+    [mp3ColumnOrder, mp3ColumnHidden]
+  );
+
+  const mp3HiddenColumnIdsSorted = useMemo(() => {
+    const hidden = [...mp3ColumnHidden].sort(
+      (a, b) => mp3ColumnOrder.indexOf(a) - mp3ColumnOrder.indexOf(b)
+    );
+    return hidden;
+  }, [mp3ColumnHidden, mp3ColumnOrder]);
+
+  const mp3VisibleWidthsArr = useMemo(() => {
+    const def = defaultMp3ColumnWidthsById();
+    return mp3VisibleColumnIds.map((id) => mp3ColWidthsById[id] ?? def[id]);
+  }, [mp3VisibleColumnIds, mp3ColWidthsById]);
+
+  mp3ColWidthsRef.current = mp3VisibleWidthsArr;
+
+  useEffect(() => {
+    saveMp3TableLayout({
+      order: mp3ColumnOrder,
+      hidden: mp3ColumnHidden,
+      widths: mp3ColWidthsById,
+    });
+  }, [mp3ColumnOrder, mp3ColumnHidden, mp3ColWidthsById]);
+
+  const hideMp3Column = useCallback((id: Mp3TableColumnId) => {
+    setMp3ColumnHidden((prev) => {
+      if (prev.has(id)) return prev;
+      const visibleCount = MP3_TABLE_ALL_COLUMN_IDS.length - prev.size;
+      if (visibleCount <= 1) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    setMp3Filters((f) => ({ ...f, [id]: "" }));
+  }, []);
+
+  const showMp3Column = useCallback((id: Mp3TableColumnId) => {
+    setMp3ColumnHidden((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const edlVisibleColumnIds = useMemo(
+    () => edlColumnOrder.filter((id) => !edlColumnHidden.has(id)),
+    [edlColumnOrder, edlColumnHidden]
+  );
+
+  const edlHiddenColumnIdsSorted = useMemo(() => {
+    return [...edlColumnHidden].sort(
+      (a, b) => edlColumnOrder.indexOf(a) - edlColumnOrder.indexOf(b)
+    );
+  }, [edlColumnHidden, edlColumnOrder]);
+
+  const edlVisibleWidthsArr = useMemo(() => {
+    const def = defaultEdlColumnWidthsById();
+    return edlVisibleColumnIds.map((id) => edlColWidthsById[id] ?? def[id]);
+  }, [edlVisibleColumnIds, edlColWidthsById]);
+
+  edlColWidthsRef.current = edlVisibleWidthsArr;
+
+  useEffect(() => {
+    saveEdlTableLayout({
+      order: edlColumnOrder,
+      hidden: edlColumnHidden,
+      widths: edlColWidthsById,
+    });
+  }, [edlColumnOrder, edlColumnHidden, edlColWidthsById]);
+
+  const hideEdlColumn = useCallback((id: EdlTableColumnId) => {
+    setEdlColumnHidden((prev) => {
+      if (prev.has(id)) return prev;
+      const visibleCount = EDL_TABLE_ALL_COLUMN_IDS.length - prev.size;
+      if (visibleCount <= 1) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+    setEdlFilters((f) => ({ ...f, [id]: "" }));
+  }, []);
+
+  const showEdlColumn = useCallback((id: EdlTableColumnId) => {
+    setEdlColumnHidden((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
 
   const removePlaylistRowsFromList = useCallback((indices: number[]) => {
     if (!indices.length) return;
@@ -1287,7 +1722,7 @@ export default function App() {
   const showTrackInMusicDatabase = useCallback((fileName: string) => {
     setTagsCtxMenu(null);
     setInfoMessage(null);
-    setMp3Filters(Array(MP3_FILTER_COL_COUNT).fill(""));
+    setMp3Filters(emptyMp3FiltersRecord());
     setMp3SelectedNames(new Set([fileName]));
     setMp3SelectionAnchorName(fileName);
     setHighlightMp3Name(fileName);
@@ -1313,49 +1748,85 @@ export default function App() {
       mode: "orphan-index" | "after-file-delete" = "orphan-index"
     ) => {
       if (!removed.length) return;
-      const removedSet = new Set(removed);
+      const normPath = (s: string) => s.replace(/\\/g, "/").trim().toLowerCase();
+      const removedNorm = new Set(removed.map(normPath));
+
+      let musicDbPathsAfterRemoval: string[] | null = null;
       try {
         if (sessionUserIdRef.current) {
           if (mode === "after-file-delete") {
-            await refreshMusicDbFromServer();
+            const state = await refreshMusicDbFromServer();
+            musicDbPathsAfterRemoval = state?.paths ?? null;
           } else {
             const merged = await apiSharedMusicDbRemovePaths(removed);
-            setMusicDbFileNames(merged);
+            setMusicDbFileNames(merged.paths);
+            setMusicDbMetadata(merged.metadata);
+            musicDbPathsAfterRemoval = merged.paths;
           }
         } else {
-          setMusicDbFileNames((prev) => prev.filter((n) => !removedSet.has(n)));
+          const nextPaths = musicDbFileNames.filter((n) => !removedNorm.has(normPath(n)));
+          musicDbPathsAfterRemoval = nextPaths;
+          setMusicDbFileNames(nextPaths);
+          setMusicDbMetadata((prev) => {
+            const next = { ...prev };
+            for (const p of removed) delete next[p];
+            return next;
+          });
         }
       } catch {
-        setMusicDbFileNames((prev) => prev.filter((n) => !removedSet.has(n)));
+        const nextPaths = musicDbFileNames.filter((n) => !removedNorm.has(normPath(n)));
+        musicDbPathsAfterRemoval = nextPaths;
+        setMusicDbFileNames(nextPaths);
+        setMusicDbMetadata((prev) => {
+          const next = { ...prev };
+          for (const p of removed) delete next[p];
+          return next;
+        });
       }
+
+      const tagKeysToRemove = collectTagStoreKeysForRemovedMusicPaths(
+        removed,
+        playlist,
+        musicDbPathsAfterRemoval
+      );
+
       setTagStore((prev) => {
         const next = { ...prev };
-        for (const p of removed) {
-          delete next[fileTagKey(p)];
+        for (const k of tagKeysToRemove) {
+          delete next[k];
         }
         persistTagStore(next);
         return next;
       });
       setPlaylist((pl) =>
-        pl?.map((row) =>
-          row.linkedTrackFileName && removedSet.has(row.linkedTrackFileName)
-            ? { ...row, linkedTrackFileName: undefined }
-            : row
-        ) ?? null
+        pl?.map((row) => {
+          const linked = row.linkedTrackFileName?.trim();
+          if (linked && removedNorm.has(normPath(linked))) {
+            return { ...row, linkedTrackFileName: undefined };
+          }
+          return row;
+        }) ?? null
       );
       setMp3SelectedNames((prev) => {
         const next = new Set(prev);
-        for (const p of removed) next.delete(p);
+        for (const x of prev) {
+          if (removedNorm.has(normPath(x))) next.delete(x);
+        }
         return next;
       });
-      setHighlightMp3Name((h) => (h && removedSet.has(h) ? null : h));
+      setHighlightMp3Name((h) => (h && removedNorm.has(normPath(h)) ? null : h));
       setMusicDbMissingHighlightList((prev) => {
         if (!prev.length) return prev;
-        const next = prev.filter((n) => !removedSet.has(n));
+        const next = prev.filter((n) => !removedNorm.has(normPath(n)));
         return next.length === prev.length ? prev : next;
       });
     },
-    [persistTagStore, refreshMusicDbFromServer]
+    [
+      persistTagStore,
+      refreshMusicDbFromServer,
+      musicDbFileNames,
+      playlist,
+    ]
   );
 
   const scanMusicDbForOrphans = useCallback(async () => {
@@ -1419,7 +1890,7 @@ export default function App() {
     if (!playlist) return [];
     return playlist.map((row) => {
       const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
-      return mergeAudioTags(base, tagStore[playlistTagKey(row.id)]);
+      return mergeAudioTags(base, playlistRowTagOverlay(row, tagStore));
     });
   }, [playlist, tagStore]);
 
@@ -1427,13 +1898,11 @@ export default function App() {
     const map = new Map<string, AudioTags>();
     for (const name of mp3KnownFromPlaylist) {
       const base = defaultTagsFromPlaylistTitle(name);
-      const row = playlist?.find((r) => r.linkedTrackFileName === name);
-      const key = row ? playlistTagKey(row.id) : fileTagKey(name);
-      let merged = mergeAudioTags(base, tagStore[key]);
+      let merged = mergeAudioTags(base, tagStore[fileTagKey(name)] ?? {});
       const anyPlaylistWarnung = playlist?.some((r) => {
         if (r.linkedTrackFileName !== name) return false;
         const b = defaultTagsFromPlaylistTitle(r.linkedTrackFileName ?? r.title);
-        return mergeAudioTags(b, tagStore[playlistTagKey(r.id)]).warnung === true;
+        return mergeAudioTags(b, playlistRowTagOverlay(r, tagStore)).warnung === true;
       });
       if (anyPlaylistWarnung) merged = { ...merged, warnung: true };
       map.set(name, merged);
@@ -1447,20 +1916,115 @@ export default function App() {
     for (let i = 0; i < playlist.length; i++) {
       const row = playlist[i];
       const merged = playlistMergedTags[i] ?? {};
-      const cells = buildEdlRowCellStrings(row, i, merged);
-      if (matchesColumnFilters(cells, edlFilters)) out.push(i);
+      const cellsMap = buildEdlRowCellsMap(row, i, merged);
+      const vals = edlVisibleColumnIds.map((id) => cellsMap[id]);
+      const filters = edlVisibleColumnIds.map((id) => edlFilters[id] ?? "");
+      if (matchesColumnFilters(vals, filters)) out.push(i);
     }
     return out;
-  }, [playlist, playlistMergedTags, edlFilters]);
+  }, [playlist, playlistMergedTags, edlFilters, edlVisibleColumnIds]);
+
+  const sortedPlaylistRowIndices = useMemo(() => {
+    const indices = [...filteredPlaylistRowIndices];
+    if (!edlSort || !playlist?.length) return indices;
+    const { columnId, direction } = edlSort;
+    indices.sort((ia, ib) => {
+      const rowA = playlist[ia]!;
+      const rowB = playlist[ib]!;
+      const mergedA = playlistMergedTags[ia] ?? {};
+      const mergedB = playlistMergedTags[ib] ?? {};
+      let va: string;
+      let vb: string;
+      switch (columnId) {
+        case "num":
+          va = String(ia + 1).padStart(12, "0");
+          vb = String(ib + 1).padStart(12, "0");
+          break;
+        case "track":
+          va = rowA.track;
+          vb = rowB.track;
+          break;
+        case "tcIn":
+          va = rowA.recIn;
+          vb = rowB.recIn;
+          break;
+        case "tcOut":
+          va = rowA.recOut;
+          vb = rowB.recOut;
+          break;
+        case "duration":
+          va = playlistDurationTimecode(rowA.recInFrames, rowA.recOutFrames);
+          vb = playlistDurationTimecode(rowB.recInFrames, rowB.recOutFrames);
+          break;
+        case "title":
+          va = rowA.linkedTrackFileName ?? rowA.title;
+          vb = rowB.linkedTrackFileName ?? rowB.title;
+          break;
+        default:
+          va = isEdlTagColumnId(columnId) ? tagCellText(mergedA, columnId) : "";
+          vb = isEdlTagColumnId(columnId) ? tagCellText(mergedB, columnId) : "";
+      }
+      return compareSortableStrings(va, vb, direction);
+    });
+    return indices;
+  }, [filteredPlaylistRowIndices, edlSort, playlist, playlistMergedTags]);
 
   const filteredMp3Names = useMemo(() => {
     return mp3KnownFromPlaylist.filter((name) => {
       const merged = fileMergedTagsByName.get(name) ?? {};
       const idx = mp3IndexByName.get(name) ?? 1;
-      const cells = buildMp3RowCellStrings(name, merged, idx);
-      return matchesColumnFilters(cells, mp3Filters);
+      const cellsMap = buildMp3RowCellsMap(name, merged, idx, musicDbMetadata[name]);
+      const vals = mp3VisibleColumnIds.map((id) => cellsMap[id]);
+      const filters = mp3VisibleColumnIds.map((id) => mp3Filters[id] ?? "");
+      return matchesColumnFilters(vals, filters);
     });
-  }, [mp3KnownFromPlaylist, fileMergedTagsByName, mp3Filters, mp3IndexByName]);
+  }, [
+    mp3KnownFromPlaylist,
+    fileMergedTagsByName,
+    mp3Filters,
+    mp3IndexByName,
+    musicDbMetadata,
+    mp3VisibleColumnIds,
+  ]);
+
+  const sortedMp3Names = useMemo(() => {
+    const list = [...filteredMp3Names];
+    if (!mp3Sort) return list;
+    const { columnId, direction } = mp3Sort;
+    list.sort((na, nb) => {
+      const idxA = mp3IndexByName.get(na) ?? 1;
+      const idxB = mp3IndexByName.get(nb) ?? 1;
+      const mergedA = fileMergedTagsByName.get(na) ?? {};
+      const mergedB = fileMergedTagsByName.get(nb) ?? {};
+      const metaA = musicDbMetadata[na];
+      const metaB = musicDbMetadata[nb];
+      let va: string;
+      let vb: string;
+      switch (columnId) {
+        case "num":
+          va = String(idxA).padStart(12, "0");
+          vb = String(idxB).padStart(12, "0");
+          break;
+        case "filename":
+          va = na;
+          vb = nb;
+          break;
+        case "created":
+          va = metaA?.createdAt ?? "";
+          vb = metaB?.createdAt ?? "";
+          break;
+        case "edited":
+          va = metaA?.updatedAt ?? "";
+          vb = metaB?.updatedAt ?? "";
+          break;
+        default:
+          va = isMp3TagColumnId(columnId) ? tagCellText(mergedA, columnId) : "";
+          vb = isMp3TagColumnId(columnId) ? tagCellText(mergedB, columnId) : "";
+      }
+      return compareSortableStrings(va, vb, direction);
+    });
+    return list;
+  }, [filteredMp3Names, mp3Sort, mp3IndexByName, fileMergedTagsByName, musicDbMetadata]);
 
   const musicDbMissingOnDiskSet = useMemo(
     () => new Set(musicDbMissingHighlightList),
@@ -1608,16 +2172,16 @@ export default function App() {
   }, [sessionUserId, mp3SelectedNames, runRecreatePlaceholderMp3Job]);
 
   const clearAllEdlFilters = useCallback(() => {
-    setEdlFilters(Array(EDL_FILTER_COL_COUNT).fill(""));
+    setEdlFilters(emptyEdlFiltersRecord());
   }, []);
 
   const clearAllMp3Filters = useCallback(() => {
-    setMp3Filters(Array(MP3_FILTER_COL_COUNT).fill(""));
+    setMp3Filters(emptyMp3FiltersRecord());
   }, []);
 
   const onEdlRowClick = useCallback(
     (e: ReactMouseEvent, playlistIndex: number) => {
-      const filtered = filteredPlaylistRowIndices;
+      const filtered = sortedPlaylistRowIndices;
       const pos = filtered.indexOf(playlistIndex);
       if (pos < 0) return;
       if (e.shiftKey && edlSelectionAnchorPlaylistIndex !== null) {
@@ -1637,12 +2201,12 @@ export default function App() {
         setEdlSelectionAnchorPlaylistIndex(playlistIndex);
       }
     },
-    [filteredPlaylistRowIndices, edlSelectionAnchorPlaylistIndex]
+    [sortedPlaylistRowIndices, edlSelectionAnchorPlaylistIndex]
   );
 
   const onMp3RowClick = useCallback(
     (e: ReactMouseEvent, name: string) => {
-      const filtered = filteredMp3Names;
+      const filtered = sortedMp3Names;
       const pos = filtered.indexOf(name);
       if (pos < 0) return;
       if (e.shiftKey && mp3SelectionAnchorName !== null) {
@@ -1662,34 +2226,58 @@ export default function App() {
         setMp3SelectionAnchorName(name);
       }
     },
-    [filteredMp3Names, mp3SelectionAnchorName]
+    [sortedMp3Names, mp3SelectionAnchorName]
   );
 
-  const attachEdlResize = useCallback((colIndex: number) => (e: ReactMouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startColumnResizeDrag({
-      colIndex,
-      clientX: e.clientX,
-      startWidths: [...edlColWidthsRef.current],
-      minForIndex: edlResizeMinForIndex,
-      getColElements: () => edlColGroupRef.current?.children,
-      onCommit: setEdlColWidths,
-    });
-  }, []);
+  const attachEdlResize = useCallback(
+    (colIndex: number) => (e: ReactMouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ids = edlVisibleColumnIds;
+      startColumnResizeDrag({
+        colIndex,
+        clientX: e.clientX,
+        startWidths: [...edlColWidthsRef.current],
+        minForIndex: (i) => edlResizeMinForColumnId(ids[i]!),
+        getColElements: () => edlColGroupRef.current?.children,
+        onCommit: (nextWidths) => {
+          setEdlColWidthsById((prev) => {
+            const n = { ...prev };
+            ids.forEach((id, i) => {
+              n[id] = nextWidths[i]!;
+            });
+            return n;
+          });
+        },
+      });
+    },
+    [edlVisibleColumnIds]
+  );
 
-  const attachMp3Resize = useCallback((colIndex: number) => (e: ReactMouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    startColumnResizeDrag({
-      colIndex,
-      clientX: e.clientX,
-      startWidths: [...mp3ColWidthsRef.current],
-      minForIndex: mp3ResizeMinForIndex,
-      getColElements: () => mp3ColGroupRef.current?.children,
-      onCommit: setMp3ColWidths,
-    });
-  }, []);
+  const attachMp3Resize = useCallback(
+    (colIndex: number) => (e: ReactMouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ids = mp3VisibleColumnIds;
+      startColumnResizeDrag({
+        colIndex,
+        clientX: e.clientX,
+        startWidths: [...mp3ColWidthsRef.current],
+        minForIndex: (i) => mp3ResizeMinForColumnId(ids[i]!),
+        getColElements: () => mp3ColGroupRef.current?.children,
+        onCommit: (nextWidths) => {
+          setMp3ColWidthsById((prev) => {
+            const n = { ...prev };
+            ids.forEach((id, i) => {
+              n[id] = nextWidths[i]!;
+            });
+            return n;
+          });
+        },
+      });
+    },
+    [mp3VisibleColumnIds]
+  );
 
   useEffect(() => {
     if (!tagsCtxMenu) return;
@@ -1834,7 +2422,8 @@ export default function App() {
       })()
     : null;
 
-  const mp3TableColCount = MP3_FILTER_COL_COUNT;
+  const mp3TableColCount = Math.max(1, mp3VisibleColumnIds.length);
+  const edlTableColCount = Math.max(1, edlVisibleColumnIds.length);
 
   const innerSplitPx = Math.max(120, splitBaseHeightPx - 7);
   const edlPanelHeightPx = innerSplitPx * splitTopFrac;
@@ -1883,6 +2472,12 @@ export default function App() {
           onOpenStoragePaths={() => setStoragePathsOpen(true)}
           onSystemSettings={onOpenSystemSettings}
           infoMessage={!error ? infoMessage : null}
+          fontScale={fontScale}
+          onFontScaleDec={onFontScaleDec}
+          onFontScaleInc={onFontScaleInc}
+          onFontScaleReset={onFontScaleReset}
+          fontScaleDecDisabled={fontScaleDecDisabled}
+          fontScaleIncDisabled={fontScaleIncDisabled}
         />
 
         <div
@@ -1916,8 +2511,28 @@ export default function App() {
                 }}
               >
                 <div className="panel-head">
-                  <div className="panel-head-title-row">
-                    <h2 className="panel-title">EDL- & Playlist</h2>
+                  <div className="panel-head-title-row panel-head-title-row--mp3">
+                    <div className="panel-mp3-title-cluster">
+                      <h2 className="panel-title">EDL- & Playlist</h2>
+                      {edlHiddenColumnIdsSorted.length > 0 && (
+                        <div
+                          className="panel-mp3-hidden-cols"
+                          role="group"
+                          aria-label="Ausgeblendete Spalten wieder anzeigen"
+                        >
+                          {edlHiddenColumnIdsSorted.map((hid) => (
+                            <button
+                              key={hid}
+                              type="button"
+                              className="btn-mp3-col-restore"
+                              onClick={() => showEdlColumn(hid)}
+                            >
+                              {getEdlColumnLabel(hid)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     {playlist && fileName && (
                       <div
                         className="panel-title-meta panel-title-meta--beside-title"
@@ -1931,7 +2546,7 @@ export default function App() {
                           {" · "}
                           {playlist.length} Einträge
                         </span>
-                        {hasActiveColumnFilters(edlFilters) && (
+                        {hasActiveColumnFiltersRecord(edlFilters) && (
                           <span>
                             {" · "}
                             {filteredPlaylistRowIndices.length} angezeigt
@@ -1943,13 +2558,17 @@ export default function App() {
                       <button
                         type="button"
                         className="btn-transfer-mp3"
-                        title={TRANSFER_TO_MP3_TOOLTIP}
+                        title={
+                          hasOfflinePlaylistRows ? TRANSFER_OFFLINE_MP3_TOOLTIP : TRANSFER_TO_MP3_TOOLTIP
+                        }
                         disabled={!playlist?.length || exportBusy}
-                        onClick={requestExportFakeMp3s}
+                        onClick={
+                          hasOfflinePlaylistRows ? requestOfflineExportFakeMp3s : requestExportFakeMp3s
+                        }
                       >
-                        Transfer to mp3
+                        {hasOfflinePlaylistRows ? "Transfer offline to mp3" : "Transfer to mp3"}
                       </button>
-                      {playlist && fileName && hasActiveColumnFilters(edlFilters) && (
+                      {playlist && fileName && hasActiveColumnFiltersRecord(edlFilters) && (
                         <button
                           type="button"
                           className="btn-filter-clear-global"
@@ -1969,183 +2588,91 @@ export default function App() {
                       <div className="table-wrap table-wrap--dense">
                         <table className="table-dense table-resizable">
                           <colgroup ref={edlColGroupRef}>
-                            {edlColWidths.map((w, i) => (
-                              <col key={i} style={{ width: w, minWidth: 0 }} />
+                            {edlVisibleWidthsArr.map((w, i) => (
+                              <col key={edlVisibleColumnIds[i]} style={{ width: w, minWidth: 0 }} />
                             ))}
                           </colgroup>
                           <thead>
                             <tr>
-                              <ColumnFilterTh
-                                colIndex={0}
-                                attachResize={attachEdlResize}
-                                label="#"
-                                filterValue={edlFilters[0]}
-                                onFilterChange={(v) =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[0] = v;
-                                    return n;
-                                  })
-                                }
-                                onClearFilter={() =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[0] = "";
-                                    return n;
-                                  })
-                                }
-                                ariaLabelFilter="Filter Spalte #"
-                              />
-                              <ColumnFilterTh
-                                colIndex={1}
-                                attachResize={attachEdlResize}
-                                label="Spur"
-                                filterValue={edlFilters[1]}
-                                onFilterChange={(v) =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[1] = v;
-                                    return n;
-                                  })
-                                }
-                                onClearFilter={() =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[1] = "";
-                                    return n;
-                                  })
-                                }
-                                ariaLabelFilter="Filter Spalte Spur"
-                              />
-                              <ColumnFilterTh
-                                colIndex={2}
-                                attachResize={attachEdlResize}
-                                label="TC-In"
-                                filterValue={edlFilters[2]}
-                                onFilterChange={(v) =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[2] = v;
-                                    return n;
-                                  })
-                                }
-                                onClearFilter={() =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[2] = "";
-                                    return n;
-                                  })
-                                }
-                                ariaLabelFilter="Filter Spalte TC-In"
-                              />
-                              <ColumnFilterTh
-                                colIndex={3}
-                                attachResize={attachEdlResize}
-                                label="TC-Out"
-                                filterValue={edlFilters[3]}
-                                onFilterChange={(v) =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[3] = v;
-                                    return n;
-                                  })
-                                }
-                                onClearFilter={() =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[3] = "";
-                                    return n;
-                                  })
-                                }
-                                ariaLabelFilter="Filter Spalte TC-Out"
-                              />
-                              <ColumnFilterTh
-                                colIndex={4}
-                                attachResize={attachEdlResize}
-                                label="Duration"
-                                filterValue={edlFilters[4]}
-                                onFilterChange={(v) =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[4] = v;
-                                    return n;
-                                  })
-                                }
-                                onClearFilter={() =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[4] = "";
-                                    return n;
-                                  })
-                                }
-                                ariaLabelFilter="Filter Spalte Duration"
-                              />
-                              <ColumnFilterTh
-                                colIndex={5}
-                                attachResize={attachEdlResize}
-                                label="Titel / Quelle"
-                                filterValue={edlFilters[5]}
-                                onFilterChange={(v) =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[5] = v;
-                                    return n;
-                                  })
-                                }
-                                onClearFilter={() =>
-                                  setEdlFilters((p) => {
-                                    const n = [...p];
-                                    n[5] = "";
-                                    return n;
-                                  })
-                                }
-                                ariaLabelFilter="Filter Spalte Titel / Quelle"
-                              />
-                              {AUDIO_TAG_TABLE_COLUMN_KEYS.map((k, j) => (
-                                <ColumnFilterTh
-                                  key={k}
-                                  colIndex={6 + j}
-                                  attachResize={attachEdlResize}
-                                  className="th-tag-field"
-                                  title={AUDIO_TAG_FIELD_LABELS[k]}
-                                  label={AUDIO_TAG_FIELD_LABELS[k]}
-                                  filterValue={edlFilters[6 + j]}
-                                  onFilterChange={(v) =>
-                                    setEdlFilters((p) => {
-                                      const n = [...p];
-                                      n[6 + j] = v;
-                                      return n;
-                                    })
-                                  }
-                                  onClearFilter={() =>
-                                    setEdlFilters((p) => {
-                                      const n = [...p];
-                                      n[6 + j] = "";
-                                      return n;
-                                    })
-                                  }
-                                  ariaLabelFilter={`Filter ${AUDIO_TAG_FIELD_LABELS[k]}`}
-                                />
-                              ))}
+                              {edlVisibleColumnIds.map((colId, j) => {
+                                const label = getEdlColumnLabel(colId);
+                                const tagTitle = isEdlTagColumnId(colId)
+                                  ? AUDIO_TAG_FIELD_LABELS[colId]
+                                  : undefined;
+                                return (
+                                  <ColumnFilterTh
+                                    key={colId}
+                                    colIndex={j}
+                                    attachResize={attachEdlResize}
+                                    className={isEdlTagColumnId(colId) ? "th-tag-field" : undefined}
+                                    title={tagTitle}
+                                    label={label}
+                                    filterValue={edlFilters[colId] ?? ""}
+                                    onFilterChange={(v) =>
+                                      setEdlFilters((p) => ({ ...p, [colId]: v }))
+                                    }
+                                    onClearFilter={() =>
+                                      setEdlFilters((p) => ({ ...p, [colId]: "" }))
+                                    }
+                                    ariaLabelFilter={`Filter ${label}`}
+                                    columnSort={{
+                                      activeDirection:
+                                        edlSort?.columnId === colId ? edlSort.direction : null,
+                                      onSortAsc: () =>
+                                        setEdlSort({ columnId: colId, direction: "asc" }),
+                                      onSortDesc: () =>
+                                        setEdlSort({ columnId: colId, direction: "desc" }),
+                                    }}
+                                    columnDrag={{
+                                      columnId: colId,
+                                      onDragStart: (e) => {
+                                        e.dataTransfer.setData(EDL_COL_DRAG_MIME, colId);
+                                        e.dataTransfer.setData("text/plain", colId);
+                                        e.dataTransfer.effectAllowed = "move";
+                                      },
+                                      onDragOver: () => {},
+                                      onDrop: (e) => {
+                                        e.preventDefault();
+                                        const from = (
+                                          e.dataTransfer.getData(EDL_COL_DRAG_MIME) ||
+                                          e.dataTransfer.getData("text/plain")
+                                        ) as EdlTableColumnId;
+                                        if (!from || from === colId) return;
+                                        setEdlColumnOrder((o) =>
+                                          reorderEdlColumns(o, edlColumnHidden, from, colId)
+                                        );
+                                      },
+                                      onDragEnd: () => {},
+                                    }}
+                                    onHideColumn={() => hideEdlColumn(colId)}
+                                    hideColumnDisabled={edlVisibleColumnIds.length <= 1}
+                                  />
+                                );
+                              })}
                             </tr>
                           </thead>
                           <tbody>
                             {playlist.length === 0 ? (
                               <tr>
-                                <td className="tc-empty" colSpan={EDL_FILTER_COL_COUNT}>
+                                <td className="tc-empty" colSpan={edlTableColCount}>
                                   Keine Einträge in der EDL.
                                 </td>
                               </tr>
                             ) : filteredPlaylistRowIndices.length === 0 ? (
                               <tr>
-                                <td className="tc-empty" colSpan={EDL_FILTER_COL_COUNT}>
+                                <td className="tc-empty" colSpan={edlTableColCount}>
                                   Keine Treffer für die Filter.
                                 </td>
                               </tr>
                             ) : (
-                              filteredPlaylistRowIndices.map((i) => {
+                              sortedPlaylistRowIndices.map((i) => {
                                 const row = playlist[i];
                                 const plMerged = playlistMergedTags[i] ?? {};
+                                const linked = row.linkedTrackFileName?.trim();
+                                const isOfflinePlaylistRow =
+                                  !!linked &&
+                                  isMp3FileName(linked) &&
+                                  resolveMusicDbPathForBasename(musicDbFileNames, linked) === null;
                                 return (
                                   <tr
                                     key={row.id}
@@ -2153,6 +2680,7 @@ export default function App() {
                                       [
                                         "table-tr-clickable",
                                         plMerged.warnung === true && "table-tr-warnung",
+                                        isOfflinePlaylistRow && "table-tr-offline-mp3",
                                         edlSelectedRowIndices.has(i) && "table-tr-selected",
                                       ]
                                         .filter(Boolean)
@@ -2161,10 +2689,10 @@ export default function App() {
                                     onClick={(e) => onEdlRowClick(e, i)}
                                     onContextMenu={(e) => {
                                       e.preventDefault();
-                                      if (!filteredPlaylistRowIndices.includes(i)) return;
+                                      if (!sortedPlaylistRowIndices.includes(i)) return;
                                       let removeFromListIndices: number[];
                                       if (edlSelectedRowIndices.has(i) && edlSelectedRowIndices.size > 1) {
-                                        removeFromListIndices = filteredPlaylistRowIndices.filter((idx) =>
+                                        removeFromListIndices = sortedPlaylistRowIndices.filter((idx) =>
                                           edlSelectedRowIndices.has(idx)
                                         );
                                       } else {
@@ -2181,17 +2709,9 @@ export default function App() {
                                       });
                                     }}
                                   >
-                                    <td className="tc table-td-resizable">{i + 1}</td>
-                                    <td className="track table-td-resizable">{row.track}</td>
-                                    <td className="tc table-td-resizable">{row.recIn}</td>
-                                    <td className="tc table-td-resizable">{row.recOut}</td>
-                                    <td className="tc table-td-resizable">
-                                      {playlistDurationTimecode(row.recInFrames, row.recOutFrames)}
-                                    </td>
-                                    <td className="table-td-resizable">{row.linkedTrackFileName ?? row.title}</td>
-                                    {AUDIO_TAG_TABLE_COLUMN_KEYS.map((k) => (
-                                      <td key={k} className="td-tag-field table-td-resizable">
-                                        {tagCellText(playlistMergedTags[i] ?? {}, k)}
+                                    {edlVisibleColumnIds.map((colId) => (
+                                      <td key={colId} className={edlDataCellClass(colId)}>
+                                        {renderEdlDataCell(colId, row, i, plMerged)}
                                       </td>
                                     ))}
                                   </tr>
@@ -2316,8 +2836,28 @@ export default function App() {
             aria-label="Musikdatenbank"
           >
             <div className="panel-head">
-              <div className="panel-head-title-row">
-                <h2 className="panel-title">Musikdatenbank</h2>
+              <div className="panel-head-title-row panel-head-title-row--mp3">
+                <div className="panel-mp3-title-cluster">
+                  <h2 className="panel-title">Musikdatenbank</h2>
+                  {mp3HiddenColumnIdsSorted.length > 0 && (
+                    <div
+                      className="panel-mp3-hidden-cols"
+                      role="group"
+                      aria-label="Ausgeblendete Spalten wieder anzeigen"
+                    >
+                      {mp3HiddenColumnIdsSorted.map((hid) => (
+                        <button
+                          key={hid}
+                          type="button"
+                          className="btn-mp3-col-restore"
+                          onClick={() => showMp3Column(hid)}
+                        >
+                          {getMp3ColumnLabel(hid)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <div className="panel-head-edl-actions">
                   {mp3KnownFromPlaylist.length > 0 && (
                     <div className="menu panel-mp3-tools-menu" ref={mp3DbToolsMenuRef}>
@@ -2392,7 +2932,7 @@ export default function App() {
                       )}
                     </div>
                   )}
-                  {mp3KnownFromPlaylist.length > 0 && hasActiveColumnFilters(mp3Filters) && (
+                  {mp3KnownFromPlaylist.length > 0 && hasActiveColumnFiltersRecord(mp3Filters) && (
                     <button
                       type="button"
                       className="btn-filter-clear-global"
@@ -2403,95 +2943,71 @@ export default function App() {
                   )}
                 </div>
               </div>
-              <p className="panel-title-meta panel-title-meta--muted">
-                Alle bisher verknüpften MP3-Dateinamen (über alle EDLs hinweg); wächst mit jedem Export.
-                {mp3KnownFromPlaylist.length > 0 && hasActiveColumnFilters(mp3Filters) && (
-                  <span>
-                    {" "}
-                    · {filteredMp3Names.length} von {mp3KnownFromPlaylist.length} angezeigt
-                  </span>
-                )}
-              </p>
             </div>
             <div className="panel-body">
               <div className="panel-scroll">
                 <div className="table-wrap table-wrap--dense">
                   <table className="table-dense table-resizable">
                     <colgroup ref={mp3ColGroupRef}>
-                      {mp3ColWidths.map((w, i) => (
-                        <col key={i} style={{ width: w, minWidth: 0 }} />
+                      {mp3VisibleWidthsArr.map((w, i) => (
+                        <col key={mp3VisibleColumnIds[i]} style={{ width: w, minWidth: 0 }} />
                       ))}
                     </colgroup>
                     <thead>
                       <tr>
-                        <ColumnFilterTh
-                          colIndex={0}
-                          attachResize={attachMp3Resize}
-                          label="#"
-                          filterValue={mp3Filters[0]}
-                          onFilterChange={(v) =>
-                            setMp3Filters((p) => {
-                              const n = [...p];
-                              n[0] = v;
-                              return n;
-                            })
-                          }
-                          onClearFilter={() =>
-                            setMp3Filters((p) => {
-                              const n = [...p];
-                              n[0] = "";
-                              return n;
-                            })
-                          }
-                          ariaLabelFilter="Filter Spalte #"
-                        />
-                        <ColumnFilterTh
-                          colIndex={1}
-                          attachResize={attachMp3Resize}
-                          label="Dateiname"
-                          filterValue={mp3Filters[1]}
-                          onFilterChange={(v) =>
-                            setMp3Filters((p) => {
-                              const n = [...p];
-                              n[1] = v;
-                              return n;
-                            })
-                          }
-                          onClearFilter={() =>
-                            setMp3Filters((p) => {
-                              const n = [...p];
-                              n[1] = "";
-                              return n;
-                            })
-                          }
-                          ariaLabelFilter="Filter Spalte Dateiname"
-                        />
-                        {AUDIO_TAG_TABLE_COLUMN_KEYS.map((k, j) => (
-                          <ColumnFilterTh
-                            key={k}
-                            colIndex={2 + j}
-                            attachResize={attachMp3Resize}
-                            className="th-tag-field"
-                            title={AUDIO_TAG_FIELD_LABELS[k]}
-                            label={AUDIO_TAG_FIELD_LABELS[k]}
-                            filterValue={mp3Filters[2 + j]}
-                            onFilterChange={(v) =>
-                              setMp3Filters((p) => {
-                                const n = [...p];
-                                n[2 + j] = v;
-                                return n;
-                              })
-                            }
-                            onClearFilter={() =>
-                              setMp3Filters((p) => {
-                                const n = [...p];
-                                n[2 + j] = "";
-                                return n;
-                              })
-                            }
-                            ariaLabelFilter={`Filter ${AUDIO_TAG_FIELD_LABELS[k]}`}
-                          />
-                        ))}
+                        {mp3VisibleColumnIds.map((colId, j) => {
+                          const label = getMp3ColumnLabel(colId);
+                          const tagTitle = isMp3TagColumnId(colId) ? AUDIO_TAG_FIELD_LABELS[colId] : undefined;
+                          return (
+                            <ColumnFilterTh
+                              key={colId}
+                              colIndex={j}
+                              attachResize={attachMp3Resize}
+                              className={isMp3TagColumnId(colId) ? "th-tag-field" : undefined}
+                              title={tagTitle}
+                              label={label}
+                              filterValue={mp3Filters[colId] ?? ""}
+                              onFilterChange={(v) =>
+                                setMp3Filters((p) => ({ ...p, [colId]: v }))
+                              }
+                              onClearFilter={() =>
+                                setMp3Filters((p) => ({ ...p, [colId]: "" }))
+                              }
+                              ariaLabelFilter={`Filter ${label}`}
+                              columnSort={{
+                                activeDirection:
+                                  mp3Sort?.columnId === colId ? mp3Sort.direction : null,
+                                onSortAsc: () =>
+                                  setMp3Sort({ columnId: colId, direction: "asc" }),
+                                onSortDesc: () =>
+                                  setMp3Sort({ columnId: colId, direction: "desc" }),
+                              }}
+                              columnDrag={{
+                                columnId: colId,
+                                onDragStart: (e) => {
+                                  e.dataTransfer.setData(MP3_COL_DRAG_MIME, colId);
+                                  e.dataTransfer.setData("text/plain", colId);
+                                  e.dataTransfer.effectAllowed = "move";
+                                },
+                                onDragOver: () => {},
+                                onDrop: (e) => {
+                                  e.preventDefault();
+                                  const from = (
+                                    e.dataTransfer.getData(MP3_COL_DRAG_MIME) ||
+                                    e.dataTransfer.getData("text/plain")
+                                  ) as Mp3TableColumnId;
+                                  if (!from || from === colId) return;
+                                  setMp3ColumnOrder((o) =>
+                                    reorderMp3Columns(o, mp3ColumnHidden, from, colId)
+                                  );
+                                },
+                                onDragEnd: () => {},
+                              }}
+                              onHideColumn={() => hideMp3Column(colId)}
+                              hideColumnDisabled={mp3VisibleColumnIds.length <= 1}
+                            />
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody>
@@ -2508,9 +3024,10 @@ export default function App() {
                           </td>
                         </tr>
                       ) : (
-                        filteredMp3Names.map((name) => {
+                        sortedMp3Names.map((name) => {
                           const merged = fileMergedTagsByName.get(name) ?? {};
                           const catNo = mp3IndexByName.get(name) ?? 1;
+                          const rowMeta = musicDbMetadata[name];
                           return (
                             <tr
                               key={name}
@@ -2532,10 +3049,10 @@ export default function App() {
                               onClick={(e) => onMp3RowClick(e, name)}
                               onContextMenu={(e) => {
                                 e.preventDefault();
-                                if (!filteredMp3Names.includes(name)) return;
+                                if (!sortedMp3Names.includes(name)) return;
                                 let deleteTargets: string[];
                                 if (mp3SelectedNames.has(name) && mp3SelectedNames.size > 1) {
-                                  deleteTargets = filteredMp3Names.filter((n) =>
+                                  deleteTargets = sortedMp3Names.filter((n) =>
                                     mp3SelectedNames.has(n)
                                   );
                                 } else {
@@ -2552,13 +3069,9 @@ export default function App() {
                                 });
                               }}
                             >
-                              <td className="tc table-td-resizable mono-cell">
-                                {formatMusicDbTrackNumber(catNo)}
-                              </td>
-                              <td className="mono-cell table-td-resizable">{name}</td>
-                              {AUDIO_TAG_TABLE_COLUMN_KEYS.map((k) => (
-                                <td key={k} className="td-tag-field table-td-resizable">
-                                  {tagCellText(merged, k)}
+                              {mp3VisibleColumnIds.map((colId) => (
+                                <td key={colId} className={mp3DataCellClass(colId)}>
+                                  {renderMp3DataCell(colId, name, merged, catNo, rowMeta)}
                                 </td>
                               ))}
                             </tr>
@@ -2733,6 +3246,7 @@ export default function App() {
               : `Tags — ${tagModal.fileName}`
           }
           initial={tagEditInitial}
+          gvlLabelDb={gvlLabelDb}
           p7SearchSource={
             tagModal.kind === "playlist" && playlist
               ? playlist[tagModal.index]?.linkedTrackFileName ?? playlist[tagModal.index]?.title ?? null

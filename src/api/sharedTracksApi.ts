@@ -1,4 +1,5 @@
 import { getUsersApiToken } from "./authToken";
+import { parseGvlLabelDbJson, type GvlLabelDb } from "../storage/gvlLabelStore";
 
 const API = "/api";
 
@@ -27,38 +28,70 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-/** Installationsweite Musikdatenbank-Pfade (Server). */
-export async function apiSharedMusicDbFetch(): Promise<string[]> {
+export type MusicDbFileMeta = { createdAt: string; updatedAt: string };
+
+export type MusicDbState = { paths: string[]; metadata: Record<string, MusicDbFileMeta> };
+
+function parseMusicDbState(data: unknown): MusicDbState {
+  const o = data as { paths?: unknown; metadata?: unknown };
+  const paths = Array.isArray(o.paths) ? o.paths.filter((x): x is string => typeof x === "string") : [];
+  const metadata: Record<string, MusicDbFileMeta> = {};
+  if (o.metadata && typeof o.metadata === "object" && o.metadata !== null) {
+    for (const [k, v] of Object.entries(o.metadata as Record<string, unknown>)) {
+      if (!v || typeof v !== "object") continue;
+      const e = v as { createdAt?: unknown; updatedAt?: unknown };
+      if (typeof e.createdAt === "string" && typeof e.updatedAt === "string") {
+        metadata[k] = { createdAt: e.createdAt, updatedAt: e.updatedAt };
+      }
+    }
+  }
+  return { paths, metadata };
+}
+
+/** Installationsweite Musikdatenbank: Pfade und Zeitstempel (Server). */
+export async function apiSharedMusicDbFetch(): Promise<MusicDbState> {
   const res = await fetch(`${API}/shared/music-db`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({}),
   });
   if (!res.ok) throw new Error(await parseError(res));
-  const data = (await res.json()) as { paths?: string[] };
-  return Array.isArray(data.paths) ? data.paths : [];
+  return parseMusicDbState(await res.json());
 }
 
-export async function apiSharedMusicDbRegister(paths: string[]): Promise<string[]> {
+export async function apiSharedMusicDbRegister(paths: string[]): Promise<MusicDbState> {
   const res = await fetch(`${API}/shared/music-db/register`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ paths }),
   });
   if (!res.ok) throw new Error(await parseError(res));
-  const data = (await res.json()) as { paths?: string[] };
-  return Array.isArray(data.paths) ? data.paths : [];
+  return parseMusicDbState(await res.json());
 }
 
-export async function apiSharedMusicDbRemovePaths(paths: string[]): Promise<string[]> {
+export async function apiSharedMusicDbRemovePaths(paths: string[]): Promise<MusicDbState> {
   const res = await fetch(`${API}/shared/music-db/remove-paths`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ paths }),
   });
   if (!res.ok) throw new Error(await parseError(res));
-  const data = (await res.json()) as { paths?: string[] };
-  return Array.isArray(data.paths) ? data.paths : [];
+  return parseMusicDbState(await res.json());
+}
+
+export async function apiSharedMusicDbTouchTagEdited(relativePath: string): Promise<MusicDbFileMeta> {
+  const res = await fetch(`${API}/shared/music-db/touch-tag-edited`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ relativePath }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { entry?: unknown };
+  const e = data.entry as { createdAt?: unknown; updatedAt?: unknown } | undefined;
+  if (!e || typeof e.createdAt !== "string" || typeof e.updatedAt !== "string") {
+    throw new Error("Ungültige Server-Antwort.");
+  }
+  return { createdAt: e.createdAt, updatedAt: e.updatedAt };
 }
 
 export async function apiSharedTracksReadBinary(relativePath: string): Promise<ArrayBuffer> {
@@ -101,6 +134,29 @@ export async function apiSharedTracksDeleteFile(relativePath: string): Promise<v
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ relativePath }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
+/** Installationsweite GVL-Label-Liste (Server); `null` wenn noch keine Datei existiert. */
+export async function apiSharedGvlLabelDbFetch(): Promise<GvlLabelDb | null> {
+  const res = await fetch(`${API}/shared/gvl-label-db`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { db?: unknown };
+  if (data.db == null) return null;
+  return parseGvlLabelDbJson(data.db);
+}
+
+/** Speichert die GVL-Liste serverseitig (nur Administratoren). */
+export async function apiSharedGvlLabelDbSave(db: GvlLabelDb): Promise<void> {
+  const res = await fetch(`${API}/shared/gvl-label-db/save`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ db }),
   });
   if (!res.ok) throw new Error(await parseError(res));
 }

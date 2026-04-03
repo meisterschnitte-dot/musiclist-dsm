@@ -1,9 +1,10 @@
 :root {
+  --app-font-scale: 1;
   font-family: "Segoe UI", system-ui, sans-serif;
   line-height: 1.5;
   color: #e8eaed;
   background: #0f1216;
-  /** Menüleiste, #root-Padding, Lücke zwischen den Panels */
+  /** Grob Menü + #root-Padding + Lücken (Höhenberechnung in App.tsx: 9.5 × root-rem). */
   --app-chrome: 9.5rem;
   /** Dezente Scrollbars (Firefox) */
   scrollbar-width: thin;
@@ -33,6 +34,11 @@
   box-sizing: border-box;
 }
 
+/** Basis-Schrift; `rem` skaliert mit der Schriftgrößen-Steuerung. */
+html {
+  font-size: calc(16px * var(--app-font-scale));
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -51,9 +57,10 @@ body {
 }
 
 #root {
-  max-width: min(1400px, 98vw);
-  margin: 0 auto;
-  padding: 1.25rem 1.25rem 2.5rem;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 20px 24px 40px;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -858,8 +865,82 @@ body {
   margin-left: 0;
 }
 
-.menubar-info {
+.menubar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
   margin-left: auto;
+  min-width: 0;
+}
+
+.menubar-font-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid #2f3540;
+  background: #141820;
+}
+
+.menubar-font-scale-label {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #8b939e;
+  padding: 0 0.15rem 0 0.1rem;
+  white-space: nowrap;
+}
+
+.menubar-font-scale button {
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1;
+  min-width: 1.65rem;
+  height: 1.65rem;
+  padding: 0 0.35rem;
+  color: #c4cad3;
+  background: #1e242d;
+  border: 1px solid #3d4654;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.menubar-font-scale button:hover:not(:disabled) {
+  background: #252b34;
+  border-color: #5a6575;
+}
+
+.menubar-font-scale button:focus-visible {
+  outline: 2px solid #7eb8ff;
+  outline-offset: 1px;
+}
+
+.menubar-font-scale button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.menubar-font-scale-value {
+  min-width: 2.75rem;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #d0d6de;
+  text-align: center;
+}
+
+.menubar-font-scale-reset {
+  font-size: 0.68rem !important;
+  font-weight: 500 !important;
+  min-width: auto !important;
+  padding: 0 0.4rem !important;
+}
+
+.menubar-info {
   min-width: 0;
   max-width: min(52vw, 32rem);
   padding: 0.1rem 0 0.1rem 0.75rem;
@@ -1089,11 +1170,6 @@ body {
   border-top: 1px solid #3d4654;
 }
 
-.modal--user-mgmt {
-  width: min(98vw, 1400px);
-  max-width: min(98vw, 1400px);
-}
-
 .user-mgmt-list-wrap {
   max-height: min(62vh, 560px);
   overflow: auto;
@@ -1236,6 +1312,12 @@ body {
   border-radius: 10px;
   padding: 1.25rem 1.35rem;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+/** Nach `.modal` — sonst überschreibt `max-width: 440px` die Breite der Benutzerverwaltung. */
+.modal.modal--user-mgmt {
+  max-width: min(96vw, 960px);
+  width: min(96vw, 960px);
 }
 
 .modal--tag {
@@ -1953,6 +2035,36 @@ body {
   background: #6a333c;
 }
 
+.btn-modal--tag-portal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  min-width: 2.5rem;
+  padding: 0.2rem;
+  box-sizing: border-box;
+}
+
+.btn-tag-portal-icon {
+  display: block;
+  flex-shrink: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.btn-tag-portal-icon--p7 {
+  object-position: center;
+}
+
+/* Schwarzes/ farbiges Apple-PNG auf weiß für dunklen Button (weiße PNGs bleiben sichtbar weiß). */
+.btn-tag-portal-icon--apple {
+  padding: 0.05rem;
+  box-sizing: border-box;
+  filter: brightness(0) invert(1);
+}
+
 .tags-ctx-menu-item--danger {
   color: #f0b4b4;
 }
@@ -1993,10 +2105,10 @@ table {
 
 table.table-dense.table-resizable {
   table-layout: fixed;
-  /* Summe der Spaltenbreiten; Zellen haben max-width:0 — horizontales Scrollen in .panel-scroll */
-  width: max-content;
+  /* Mindestens so breit wie der Panel-Bereich (keine toten Flächen links/rechts bei schmaler Summe der Spalten); breiter wenn nötig. */
+  width: 100%;
+  min-width: max-content;
   max-width: none;
-  min-width: 0;
 }
 
 table.table-resizable th,
@@ -2105,6 +2217,123 @@ table.table-resizable td:last-child {
 
 .panel-head-title-row .panel-title {
   margin: 0;
+}
+
+.panel-head-title-row--mp3 {
+  align-items: flex-start;
+}
+
+.panel-mp3-title-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.65rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.panel-mp3-hidden-cols {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.45rem;
+}
+
+.btn-mp3-col-restore {
+  font: inherit;
+  font-size: 0.65rem;
+  line-height: 1.2;
+  padding: 0.12rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid #4a6078;
+  background: #1a2430;
+  color: #a8b8c8;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-mp3-col-restore:hover {
+  background: #243040;
+  color: #e8eaed;
+  border-color: #5a7898;
+}
+
+.table-th-col-dnd .table-th-head-row {
+  gap: 0.2rem;
+  flex-wrap: wrap;
+}
+
+.table-th-col-drag-handle {
+  cursor: grab;
+  user-select: none;
+  color: #7a8a9a;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 0 0.1rem;
+  flex-shrink: 0;
+}
+
+.table-th-col-drag-handle:active {
+  cursor: grabbing;
+}
+
+.table-th-sort-btns {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0;
+  margin-left: 0.1rem;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.table-th-sort-btn {
+  font: inherit;
+  font-size: 0.55rem;
+  line-height: 1;
+  padding: 0.05rem 0.2rem;
+  margin: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: #6a7a8a;
+  cursor: pointer;
+}
+
+.table-th-sort-btn:hover {
+  background: #2a3544;
+  color: #c8d8ec;
+}
+
+.table-th-sort-btn--active {
+  background: #3a4a5c;
+  color: #e8f0ff;
+}
+
+.table-th-col-hide {
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0 0.28rem;
+  min-width: 1.1rem;
+  border-radius: 4px;
+  border: 1px solid #4a5562;
+  background: #222a32;
+  color: #9aa8b8;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.table-th-col-hide:hover:not(:disabled) {
+  background: #2e3844;
+  color: #e8eaed;
+}
+
+.table-th-col-hide:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .panel-title-meta--beside-title {
@@ -2384,6 +2613,31 @@ tr:hover td {
 .table-dense tbody tr.table-tr-warnung.table-tr-mp3-highlight.table-tr-selected td,
 .table-dense tbody tr.table-tr-warnung.table-tr-mp3-highlight.table-tr-selected:hover td {
   color: #ffab91;
+}
+
+/** Verknüpfte MP3 fehlt in der Musikdatenbank (z. B. nach Löschen) — heller Hintergrund, dunkle Schrift */
+.table-dense tbody tr.table-tr-offline-mp3 td {
+  background: #ffffff;
+  color: #111111;
+}
+
+.table-dense tbody tr.table-tr-offline-mp3:hover td {
+  background: #f0f0f0;
+  color: #000000;
+}
+
+.table-dense tbody tr.table-tr-offline-mp3.table-tr-selected td,
+.table-dense tbody tr.table-tr-offline-mp3.table-tr-selected:hover td {
+  background: #e0e0e0;
+  color: #000000;
+}
+
+.table-dense tbody tr.table-tr-offline-mp3.table-tr-warnung td {
+  color: #111111;
+}
+
+.table-dense tbody tr.table-tr-offline-mp3.table-tr-warnung:hover td {
+  color: #000000;
 }
 
 .import-progress-backdrop {

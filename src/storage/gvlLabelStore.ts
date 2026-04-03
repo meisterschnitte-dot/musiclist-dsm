@@ -20,6 +20,14 @@ export type GvlLabelDb = {
   entries: GvlLabelEntry[];
 };
 
+/** Parst Server-Antworten oder importiertes JSON; `null` bei ungültiger Struktur. */
+export function parseGvlLabelDbJson(data: unknown): GvlLabelDb | null {
+  if (!data || typeof data !== "object") return null;
+  const p = data as Partial<GvlLabelDb>;
+  if (typeof p.importedAtIso !== "string" || !Array.isArray(p.entries)) return null;
+  return { importedAtIso: p.importedAtIso, entries: normalizeGvlEntries(p.entries) };
+}
+
 function normalizeGvlEntries(entries: unknown): GvlLabelEntry[] {
   if (!Array.isArray(entries)) return [];
   return (entries as Partial<GvlLabelEntry>[]).map((e) => ({
@@ -97,4 +105,21 @@ export function saveGvlLabelDb(dbValue: GvlLabelDb): void {
     /* ignore */
   }
   void saveGvlLabelDbToIdb(dbValue);
+}
+
+/** Vergleicht Labelcodes (z. B. „LC 97096“, „97096“) mit Einträgen aus der GVL-Liste. */
+export function normalizeLabelcodeForMatch(s: string): string {
+  const d = s.replace(/\D/g, "");
+  if (d.length >= 2) return d;
+  return s.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+export function findGvlEntryByLabelcode(
+  db: GvlLabelDb | null,
+  labelcodeRaw: string
+): GvlLabelEntry | undefined {
+  if (!db?.entries?.length || !labelcodeRaw?.trim()) return undefined;
+  const n = normalizeLabelcodeForMatch(labelcodeRaw);
+  if (!n) return undefined;
+  return db.entries.find((e) => normalizeLabelcodeForMatch(e.labelcode) === n);
 }
