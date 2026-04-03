@@ -5,7 +5,9 @@
 import "dotenv/config";
 import cors from "cors";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
+import { INITIAL_INVITE_PASSWORD } from "./constants";
 import { createUserApiRouter } from "./userRoutes";
 import { createUserEdlRouter } from "./userEdlRoutes";
 import { createSharedTracksRouter } from "./sharedTracksRoutes";
@@ -15,6 +17,10 @@ const PORT =
 const MAIL_SECRET =
   process.env.MUSICLIST_MAIL_SECRET?.trim() || process.env.EASY_GEMA_MAIL_SECRET?.trim();
 const DISPO_CC = process.env.SMTP_BCC?.trim() || "dispo@dsm.team";
+
+const ALLOWED_ORIGINS = (process.env.MUSICLIST_APP_URL || "http://localhost:5273")
+  .split(",")
+  .map((u) => u.trim().replace(/\/$/, ""));
 
 const getTransporter = () => {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
@@ -68,8 +74,32 @@ ${text}
 }
 
 const app = express();
-app.use(cors({ origin: true }));
-app.use(express.json({ limit: "25mb" }));
+
+// --- Security ---
+app.use(cors({
+  origin: process.env.NODE_ENV === "production" ? ALLOWED_ORIGINS : true,
+  credentials: true,
+}));
+
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+
+app.use(express.json({ limit: "10mb" }));
+
+// Rate limiting for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 15, // max 15 attempts per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Zu viele Anmeldeversuche. Bitte in 15 Minuten erneut versuchen." },
+});
+app.use("/api/auth/login", authLimiter);
+app.use("/api/auth/bootstrap", authLimiter);
 
 app.use("/api", createUserApiRouter());
 app.use("/api", createUserEdlRouter());
@@ -87,9 +117,9 @@ app.post("/api/send-user-invite", async (req, res) => {
 
     const { email, firstName, lastName, roleLabel, appUrl } = req.body as Record<string, unknown>;
     const em = typeof email === "string" ? email.trim() : "";
-    const fn = typeof firstName === "string" ? firstName.trim() : "";
-    const ln = typeof lastName === "string" ? lastName.trim() : "";
-    const role = typeof roleLabel === "string" ? roleLabel.trim() : "Benutzer";
+    const fn = typeof firstName === "string" ? firstName.trim().replace(/[\r\n]/g, "") : "";
+    const ln = typeof lastName === "string" ? lastName.trim().replace(/[\r\n]/g, "") : "";
+    const role = typeof roleLabel === "string" ? roleLabel.trim().replace(/[\r\n]/g, "") : "Benutzer";
     const baseUrl =
       typeof appUrl === "string" && appUrl.trim()
         ? appUrl.trim().replace(/\/$/, "")
@@ -110,7 +140,7 @@ Sie wurden als ${role} für die Anwendung Musiclist eingeladen.
 
 Ihre Zugangsdaten:
 E-Mail (Anmeldename): ${em}
-Initiales Passwort: Initial#123
+Initiales Passwort: ${INITIAL_INVITE_PASSWORD}
 
 WICHTIG — Sicherheit:
 Bitte ändern Sie dieses Passwort unmittelbar nach der ersten Anmeldung (über eine künftige Passwort-Funktion oder durch Rücksprache mit Ihrem Administrator).

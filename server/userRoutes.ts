@@ -35,7 +35,7 @@ function plausibleEmail(s: string): boolean {
 export function createUserApiRouter(): Router {
   const r = Router();
 
-  r.get("/users/hints", (_req, res) => {
+  r.get("/users/hints", bearerAuth, (_req, res) => {
     const users = listUsers();
     res.json({
       hints: users.map((u: StoredUser) => ({
@@ -75,8 +75,8 @@ export function createUserApiRouter(): Router {
       res.status(400).json({ error: "Bitte eine gültige E-Mail-Adresse eingeben." });
       return;
     }
-    if (password.length < 4) {
-      res.status(400).json({ error: "Passwort mindestens 4 Zeichen." });
+    if (password.length < 8) {
+      res.status(400).json({ error: "Passwort mindestens 8 Zeichen." });
       return;
     }
     const email = normalizeEmail(emailRaw);
@@ -211,8 +211,8 @@ export function createUserApiRouter(): Router {
       res.status(403).json({ error: "Nicht berechtigt." });
       return;
     }
-    if (newPassword.length < 6) {
-      res.status(400).json({ error: "Neues Passwort mindestens 6 Zeichen." });
+    if (newPassword.length < 8) {
+      res.status(400).json({ error: "Neues Passwort mindestens 8 Zeichen." });
       return;
     }
     try {

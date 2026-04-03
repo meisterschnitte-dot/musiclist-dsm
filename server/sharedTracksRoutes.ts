@@ -88,7 +88,7 @@ export function createSharedTracksRouter(): Router {
     }
   });
 
-  r.post("/shared/tracks/write-binary", async (req: Request, res: Response) => {
+  r.post("/shared/tracks/write-binary", requireAdmin, async (req: Request, res: Response) => {
     try {
       const relativePath = relativePathBody(req.body);
       const base64 = typeof req.body?.base64 === "string" ? req.body.base64 : "";
