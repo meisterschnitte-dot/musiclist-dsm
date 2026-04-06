@@ -3,7 +3,12 @@ import { isPlaylistLibraryFileName } from "./playlistLibraryFile";
 /** Alle EDL-Dateien und Unterordner liegen unter diesem Namen relativ zum gewählten Basisordner. */
 export const EDL_LIBRARY_FOLDER_NAME = "edl";
 
-export type EdlDirEntry = { name: string; kind: "file" | "directory" };
+export type EdlDirEntry = {
+  name: string;
+  kind: "file" | "directory";
+  /** Optional: Anzeigename (Navigation nutzt weiterhin `name`). */
+  label?: string;
+};
 
 /** Unterordner `edl` unter dem vom Nutzer gewählten Verzeichnis anlegen bzw. öffnen. */
 export async function getOrCreateEdlLibraryRoot(

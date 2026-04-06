@@ -235,10 +235,29 @@ function normTagPath(s: string): string {
   return s.replace(/\\/g, "/").trim().toLowerCase();
 }
 
+/** Normalisierte Pfade, die noch in der Playlist verknüpft sind (Offline-Zeilen nach DB-Löschen). */
+function playlistNormLinkedPaths(playlist: PlaylistEntry[] | null | undefined): Set<string> {
+  const s = new Set<string>();
+  for (const row of playlist ?? []) {
+    const linked = row.linkedTrackFileName?.trim();
+    if (linked) s.add(normTagPath(linked));
+  }
+  return s;
+}
+
+function playlistReferencesBasename(playlist: PlaylistEntry[] | null | undefined, baseLower: string): boolean {
+  for (const row of playlist ?? []) {
+    const linked = row.linkedTrackFileName?.trim();
+    if (!linked) continue;
+    if (basenamePath(linked).toLowerCase() === baseLower) return true;
+  }
+  return false;
+}
+
 /**
  * Schlüssel aus dem Tag-Store entfernen, die zu gelöschten MP3-Pfaden gehören:
- * — `f:` mit vollem relativen Pfad (und ggf. nur Dateiname, wenn kein anderer DB-Eintrag denselben Basename hat),
- * — `p:` für Zeilen, die mit einem der gelöschten Pfade verknüpft waren (sonst bleiben Zeilen-Tags und erscheinen nach Neuverknüpfung wieder).
+ * — `f:` mit vollem relativen Pfad (und ggf. nur Dateiname, wenn kein anderer DB-Eintrag denselben Basename hat).
+ * Pfade, die noch in der Playlist verknüpft sind, bleiben erhalten (Offline-Zeilen: Tags + weiße Markierung).
  */
 export function collectTagStoreKeysForRemovedMusicPaths(
   removedRelativePaths: string[],
@@ -246,28 +265,23 @@ export function collectTagStoreKeysForRemovedMusicPaths(
   /** Aktuelle Musikdatenbank nach dem Löschen; bei `null` werden keine reinen Basename-`f:`-Schlüssel gelöscht. */
   musicDbPathsAfterRemoval: string[] | null
 ): string[] {
-  const removedNorm = new Set(removedRelativePaths.map(normTagPath));
   const keys = new Set<string>();
+  const playlistLinked = playlistNormLinkedPaths(playlist);
 
   for (const p of removedRelativePaths) {
+    const np = normTagPath(p);
+    if (playlistLinked.has(np)) continue;
     keys.add(fileTagKey(p));
     if (musicDbPathsAfterRemoval) {
       const b = basenamePath(p);
       const bl = b.toLowerCase();
+      if (playlistReferencesBasename(playlist, bl)) continue;
       const otherStillHasBasename = musicDbPathsAfterRemoval.some(
         (x) => basenamePath(x).toLowerCase() === bl
       );
       if (!otherStillHasBasename) {
         keys.add(fileTagKey(b));
       }
-    }
-  }
-
-  for (const row of playlist ?? []) {
-    const linked = row.linkedTrackFileName?.trim();
-    if (!linked) continue;
-    if (removedNorm.has(normTagPath(linked))) {
-      keys.add(playlistTagKey(row.id));
     }
   }
 

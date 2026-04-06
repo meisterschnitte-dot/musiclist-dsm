@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchCustomersList } from "../api/customersApi";
 import { sendUserInvite } from "../api/sendUserInvite";
 import {
   deleteUserRequest,
@@ -39,6 +40,17 @@ export function UserManagementModal({
   const [newLast, setNewLast] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [newRole, setNewRole] = useState<UserRole>("user");
+  const [newCompany, setNewCompany] = useState("");
+  const [customerNames, setCustomerNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    void fetchCustomersList()
+      .then((rows) => setCustomerNames(rows.map((c) => c.name).sort((a, b) => a.localeCompare(b, "de"))))
+      .catch(() => setCustomerNames([]));
+  }, [open]);
+
+  const companyDatalistId = useMemo(() => "user-mgmt-company-datalist", []);
 
   const reloadList = useCallback(async () => {
     const list = await fetchUsersList();
@@ -52,6 +64,7 @@ export function UserManagementModal({
     const ln = newLast.trim();
     const em = normalizeUserEmail(newEmail);
     const roleForInvite = newRole;
+    const company = newCompany.trim();
     if (!fn || !ln) {
       setErr("Vor- und Nachname sind erforderlich.");
       return;
@@ -71,14 +84,21 @@ export function UserManagementModal({
         lastName: ln,
         email: em,
         role: roleForInvite,
+        ...(roleForInvite === "customer" && company ? { companyName: company } : {}),
       });
       await reloadList();
       setNewFirst("");
       setNewLast("");
       setNewEmail("");
       setNewRole("user");
+      setNewCompany("");
 
-      const roleLabel = roleForInvite === "admin" ? "Administrator" : "Benutzer";
+      const roleLabel =
+        roleForInvite === "admin"
+          ? "Administrator"
+          : roleForInvite === "customer"
+            ? "Kunde"
+            : "Benutzer";
       const appUrl =
         typeof window !== "undefined" ? `${window.location.origin}${window.location.pathname}` : "";
       try {
@@ -89,7 +109,7 @@ export function UserManagementModal({
           roleLabel,
           appUrl: appUrl.replace(/\/$/, "") || window.location.origin,
         });
-        setInfo("Einladungs-E-Mail wurde gesendet.");
+        setInfo("Begrüßungs-E-Mail mit Zugangsdaten wurde gesendet.");
       } catch (e) {
         setInfo(
           `Benutzer wurde angelegt. E-Mail-Versand fehlgeschlagen: ${e instanceof Error ? e.message : String(e)} — bitte SMTP prüfen und ggf. Mail-Server starten (\`npm run dev\`). Das Initialpasswort wurde dem Benutzer nicht mitgeteilt.`
@@ -100,7 +120,7 @@ export function UserManagementModal({
     } finally {
       setBusy(false);
     }
-  }, [users, newFirst, newLast, newEmail, newRole, reloadList]);
+  }, [users, newFirst, newLast, newEmail, newRole, newCompany, reloadList]);
 
   const removeUser = useCallback(
     async (id: string) => {
@@ -164,6 +184,7 @@ export function UserManagementModal({
                 <th>Vorname</th>
                 <th>Nachname</th>
                 <th>E-Mail</th>
+                <th>Firma</th>
                 <th>Rolle</th>
                 <th />
               </tr>
@@ -174,7 +195,14 @@ export function UserManagementModal({
                   <td>{u.firstName}</td>
                   <td>{u.lastName}</td>
                   <td className="mono-cell user-mgmt-table-email">{u.email}</td>
-                  <td>{u.role === "admin" ? "Administrator" : "Benutzer"}</td>
+                  <td>{u.companyName ?? "—"}</td>
+                  <td>
+                    {u.role === "admin"
+                      ? "Administrator"
+                      : u.role === "customer"
+                        ? "Kunde"
+                        : "Benutzer"}
+                  </td>
                   <td>
                     <button
                       type="button"
@@ -231,9 +259,28 @@ export function UserManagementModal({
               className="user-mgmt-select"
             >
               <option value="user">Benutzer</option>
+              <option value="customer">Kunde</option>
               <option value="admin">Administrator</option>
             </select>
           </label>
+          {newRole === "customer" && (
+            <label className="tag-field">
+              <span>Firmenname (optional)</span>
+              <input
+                type="text"
+                value={newCompany}
+                onChange={(e) => setNewCompany(e.target.value)}
+                list={companyDatalistId}
+                autoComplete="off"
+                placeholder="Aus Kundenverwaltung oder neu …"
+              />
+              <datalist id={companyDatalistId}>
+                {customerNames.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
+            </label>
+          )}
           <button
             type="button"
             className="btn-modal primary"

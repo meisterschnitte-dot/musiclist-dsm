@@ -206,7 +206,20 @@ function pushToBucket(b: LineBuckets, seg: ColSeg, str: string): void {
   }
 }
 
-function toRowsByColumns(items: TextItem[], cols: GvlPdfColumns): Row[] {
+/**
+ * PDF-Seiten sind getrennt — bricht z. B. „Universal Music Entertainment GmbH“
+ * im Hersteller um, steht der Rest auf der nächsten Seite ohne neue Labelcode-Zeile.
+ * Dann würde die Fortsetzung verworfen (`if (!cur) continue`).
+ *
+ * @param seedRow Letzte Zeile der vorherigen Seite (noch nicht in `rows` ausgegeben).
+ * @param flushAtEnd true auf der letzten PDF-Seite: offene Zeile abschließen und ausgeben.
+ */
+function toRowsByColumns(
+  items: TextItem[],
+  cols: GvlPdfColumns,
+  seedRow: Row | null,
+  flushAtEnd: boolean
+): { rows: Row[]; carry: Row | null } {
   const anchors = cols.anchors;
   const lines = new Map<string, LineBuckets>();
   for (const it of items) {
@@ -225,7 +238,7 @@ function toRowsByColumns(items: TextItem[], cols: GvlPdfColumns): Row[] {
 
   const ordered = [...lines.values()].sort((a, b) => b.y - a.y);
   const rows: Row[] = [];
-  let cur: Row | null = null;
+  let cur: Row | null = seedRow ?? null;
   for (const l of ordered) {
     const codeCol = joinCell(l.code);
     const labelCol = joinCell(l.label);
@@ -309,8 +322,8 @@ function toRowsByColumns(items: TextItem[], cols: GvlPdfColumns): Row[] {
       cur.rechter = cur.rechter ? `${cur.rechter};${rechter}` : rechter;
     }
   }
-  if (cur) rows.push(cur);
-  return rows;
+  if (flushAtEnd && cur) rows.push(cur);
+  return { rows, carry: flushAtEnd ? null : cur };
 }
 
 function uniqKeepOrder(values: string[]): string[] {
@@ -322,6 +335,27 @@ function uniqKeepOrder(values: string[]): string[] {
     out.push(v);
   }
   return out;
+}
+
+function mergeGvlPdfRowIntoMap(byCode: Map<string, GvlLabelEntry>, r: Row): void {
+  const code = normalizeLabelcodeCandidate(r.code);
+  if (!code) return;
+  const prev = byCode.get(code);
+  const mergedRechter = uniqKeepOrder(
+    [prev?.rechterueckrufe ?? "", r.rechter]
+      .join(";")
+      .split(";")
+      .map((x) => x.trim())
+      .filter((x) => RX_RECHTER.test(x))
+  ).join(";");
+  byCode.set(code, {
+    labelcode: code,
+    label: normalizeSpaces(r.label || prev?.label || ""),
+    kuerzel: normalizeSpaces(r.kuerzel || prev?.kuerzel || ""),
+    plm: normalizeSpaces(r.plm || prev?.plm || ""),
+    hersteller: normalizeSpaces(r.hersteller || prev?.hersteller || ""),
+    rechterueckrufe: mergedRechter,
+  });
 }
 
 export async function parseGvlLabelPdfFile(
@@ -338,6 +372,8 @@ export async function parseGvlLabelPdfFile(
   const doc = await task.promise;
   const byCode = new Map<string, GvlLabelEntry>();
   let fallbackCols: GvlPdfColumns | null = null;
+  /** Letzte Tabellenzeile der vorherigen Seite (bei Seitenumbruch vor nächster Seite ausgeben). */
+  let carryRow: Row | null = null;
 
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p);
@@ -349,28 +385,17 @@ export async function parseGvlLabelPdfFile(
     const cols: GvlPdfColumns | null = extractColumnsByX(items) ?? fallbackCols;
     if (!cols) continue;
     fallbackCols = cols;
-    const rows = toRowsByColumns(items, cols);
+    const flushAtEnd = p === doc.numPages;
+    const { rows, carry } = toRowsByColumns(items, cols, carryRow, flushAtEnd);
+    carryRow = carry;
     for (const r of rows) {
-      const code = normalizeLabelcodeCandidate(r.code);
-      if (!code) continue;
-      const prev = byCode.get(code);
-      const mergedRechter = uniqKeepOrder(
-        [prev?.rechterueckrufe ?? "", r.rechter]
-          .join(";")
-          .split(";")
-          .map((x) => x.trim())
-          .filter((x) => RX_RECHTER.test(x))
-      ).join(";");
-      byCode.set(code, {
-        labelcode: code,
-        label: normalizeSpaces(r.label || prev?.label || ""),
-        kuerzel: normalizeSpaces(r.kuerzel || prev?.kuerzel || ""),
-        plm: normalizeSpaces(r.plm || prev?.plm || ""),
-        hersteller: normalizeSpaces(r.hersteller || prev?.hersteller || ""),
-        rechterueckrufe: mergedRechter,
-      });
+      mergeGvlPdfRowIntoMap(byCode, r);
     }
     onProgress?.(p, doc.numPages);
+  }
+
+  if (carryRow) {
+    mergeGvlPdfRowIntoMap(byCode, carryRow);
   }
 
   return [...byCode.values()].sort((a, b) => {

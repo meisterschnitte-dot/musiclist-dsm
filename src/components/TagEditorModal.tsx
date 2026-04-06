@@ -6,7 +6,12 @@ import {
   type ChangeEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { AUDIO_TAG_FIELD_LABELS, type AudioTags } from "../audio/audioTags";
+import {
+  AUDIO_TAG_FIELD_LABELS,
+  rechterueckrufImpliesWarnung,
+  warnungEffective,
+  type AudioTags,
+} from "../audio/audioTags";
 import {
   findGvlEntryByLabelcode,
   loadGvlLabelDb,
@@ -24,10 +29,20 @@ import {
   BMGPM_SEARCH_URL,
 } from "../bmgProductionMusic";
 import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
+import { openSonotonSearchWithOptionalClip, SONOTON_SEARCH_BASE_URL } from "../sonotonSearch";
+import { openEarmotionSearchWithOptionalClip, EARMOTION_ACCOUNT_URL } from "../earmotionSearch";
 import {
   looksLikeBmgPmMetadata,
   parseBmgPmMetadataText,
 } from "../audio/parseBmgPmMetadataText";
+import {
+  looksLikeSonotonMetadata,
+  parseSonotonMetadataText,
+} from "../audio/parseSonotonMetadataText";
+import {
+  looksLikeEarmotionMetadata,
+  parseEarmotionMetadataText,
+} from "../audio/parseEarmotionMetadataText";
 import {
   looksLikeAppleMusicCreditsText,
   parseAppleMusicCreditsText,
@@ -51,8 +66,10 @@ function formFromMerged(t: AudioTags): TagFormFields {
   };
 }
 
-function formToAudioTags(f: TagFormFields, warnung: boolean): AudioTags {
-  return { ...f, warnung };
+function formToAudioTags(f: TagFormFields, warnToggle: boolean): AudioTags {
+  const r3 = rechterueckrufImpliesWarnung(f.gvlRechte);
+  const manualOnly = warnToggle && !r3;
+  return { ...f, warnung: manualOnly ? true : false };
 }
 
 /** Nur Auswahl innerhalb des Dateinamen-Blocks (nicht z. B. in Eingabefeldern). */
@@ -118,11 +135,12 @@ export function TagEditorModal({
   onSave,
 }: Props) {
   const [form, setForm] = useState(() => formFromMerged(initial));
-  const [warnToggle, setWarnToggle] = useState(() => initial.warnung === true);
+  const [warnToggle, setWarnToggle] = useState(() => warnungEffective(initial));
   const [saveBusy, setSaveBusy] = useState(false);
   const saveMountedRef = useRef(true);
   const [pasteDraft, setPasteDraft] = useState("");
   const [overwriteParsed, setOverwriteParsed] = useState(true);
+  const prevR3InRechteRef = useRef(false);
   const filenameSelectRef = useRef<HTMLDivElement>(null);
   const [filenameCtx, setFilenameCtx] = useState<
     null | { x: number; y: number; selectionText: string }
@@ -148,7 +166,8 @@ export function TagEditorModal({
   useEffect(() => {
     if (!open) return;
     setForm(formFromMerged(initial));
-    setWarnToggle(initial.warnung === true);
+    setWarnToggle(warnungEffective(initial));
+    prevR3InRechteRef.current = rechterueckrufImpliesWarnung(initial.gvlRechte);
     setSaveBusy(false);
     setPasteDraft("");
     setOverwriteParsed(true);
@@ -165,6 +184,14 @@ export function TagEditorModal({
       gvlRechte: entry.rechterueckrufe,
     }));
   }, [open, gvlApplyFromDb?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const now = rechterueckrufImpliesWarnung(form.gvlRechte);
+    if (now) setWarnToggle(true);
+    else if (prevR3InRechteRef.current && !now) setWarnToggle(false);
+    prevR3InRechteRef.current = now;
+  }, [open, form.gvlRechte]);
 
   useEffect(() => {
     if (!open || !p7SearchSource?.trim()) return;
@@ -221,7 +248,11 @@ export function TagEditorModal({
       ? parseBmgPmMetadataText(pasteDraft)
       : looksLikeAppleMusicCreditsText(pasteDraft)
         ? parseAppleMusicCreditsText(pasteDraft)
-        : parseGemaOcrText(pasteDraft);
+        : looksLikeSonotonMetadata(pasteDraft)
+          ? parseSonotonMetadataText(pasteDraft)
+          : looksLikeEarmotionMetadata(pasteDraft)
+            ? parseEarmotionMetadataText(pasteDraft)
+            : parseGemaOcrText(pasteDraft);
     let mergedFields: Partial<AudioTags> = { ...fields };
     const lc = mergedFields.labelcode?.trim();
     if (lc) {
@@ -300,22 +331,9 @@ export function TagEditorModal({
           </div>
         ) : null}
         <div className="tag-import-block">
-          <div className="tag-import-heading">Text aus GEMA / Google Lens / BMG PM / Apple Music</div>
-          <p className="tag-import-hint">
-            <strong>Apple Music</strong> (Seite kopieren): aus „Komposition und Liedtext“ werden
-            Komponist:innen/Songwriter:innen als Namen erkannt (Rollen- und Länderzeilen entfallen) und
-            im Feld Komponist mit Komma gesetzt; einzeilige Kopfzeilen mit{" "}
-            <code>=Songtitel</code>, <code>= Albumtitel</code>, <code>= Interpret</code> werden
-            übernommen, wenn vorhanden. <strong>GEMA-Zeilen</strong> (TITEL, CD, JAHR, …): bei
-            LABEL/VERLAG Text vor dem ersten{" "}
-            <code>/</code> → Label, danach → Hersteller; <code>(LC …)</code> am Verlagsende wird entfernt.{" "}
-            <strong>Google-Lens-Liste</strong> mit <code>Titel:</code>, <code>Composer:</code>,{" "}
-            <code>Album:</code>, <code>Label Code:</code>, <code>ISRC:</code> usw.: gleiches Feld — bei
-            erkanntem Labelcode werden Label, Hersteller und Rechterückruf aus der importierten GVL-Liste
-            ergänzt (falls passend). <strong>BMG Production Music</strong> (Block mit{" "}
-            <code>Album Code:</code>, <code>Track Title:</code>, …): Album aus Code + Titel, Label-Zeile
-            wird nicht übernommen.
-          </p>
+          <div className="tag-import-heading">
+            Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Earmotion
+          </div>
           <textarea
             className="tag-import-textarea"
             value={pasteDraft}
@@ -443,6 +461,22 @@ export function TagEditorModal({
               onClick={() => void openBmgPmSearchWithOptionalClipAsync(p7SearchSource)}
             >
               BMGPM-Suche
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              title={`${SONOTON_SEARCH_BASE_URL} — Suchbegriff (Dateiname bis zum ersten _) in die Zwischenablage; Suche mit vorausgefülltem Feld (search=).`}
+              onClick={() => openSonotonSearchWithOptionalClip(p7SearchSource)}
+            >
+              Sonoton-Suche
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              title={`${EARMOTION_ACCOUNT_URL} — Mit „- EARMOTION“: Text davor; sonst ganzer Dateiname. Endungen .mp3/.wav werden nicht kopiert. Auf der Seite Strg+V / ⌘V.`}
+              onClick={() => openEarmotionSearchWithOptionalClip(p7SearchSource)}
+            >
+              Earmotion-Suche
             </button>
             {showGvlDatabaseButton ? (
               <button

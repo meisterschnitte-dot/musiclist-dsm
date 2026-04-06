@@ -75,6 +75,8 @@ type Props = {
   ) => void;
   /** Datei, die aktuell aus dem Browser in der Playlist geöffnet ist — bleibt markiert bis zur nächsten Browser-/Import-Aktion. */
   activeLibraryFile?: { parentSegments: string[]; fileName: string } | null;
+  /** Nur lesen: keine Importe, kein Löschen, kein Verschieben (Kundenkonten). */
+  readOnly?: boolean;
 };
 
 export function EdlLibraryPanel({
@@ -95,6 +97,7 @@ export function EdlLibraryPanel({
   importGemaXlsDisabled = false,
   onEdlFolderRenamed,
   activeLibraryFile = null,
+  readOnly = false,
 }: Props) {
   const [cache, setCache] = useState<Record<string, EdlDirEntry[] | undefined>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -220,6 +223,7 @@ export function EdlLibraryPanel({
 
   const openContextMenu = useCallback(
     (e: MouseEvent, kind: "file" | "directory", parentSegments: string[], name: string) => {
+      if (readOnly && kind === "directory") return;
       e.preventDefault();
       e.stopPropagation();
       const pad = 8;
@@ -231,7 +235,7 @@ export function EdlLibraryPanel({
       if (y + mh > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - mh - pad);
       setContextMenu({ x, y, kind, parentSegments, name });
     },
-    []
+    [readOnly]
   );
 
   const runDeleteFromContext = useCallback(
@@ -240,7 +244,11 @@ export function EdlLibraryPanel({
       const label =
         m.kind === "directory" ? `Ordner „${m.name}“ inkl. Inhalt` : `Datei „${m.name}“`;
       setContextMenu(null);
-      if (!window.confirm(`${label} wirklich löschen?`)) return;
+      const confirmText =
+        readOnly && m.kind === "file"
+          ? `${label} aus Ihrer Kundenansicht ausblenden?`
+          : `${label} wirklich löschen?`;
+      if (!window.confirm(confirmText)) return;
       const deleteInfo = toLibraryDeleteInfo(m);
       if (
         deleteClearsPlaylist?.(deleteInfo) &&
@@ -286,7 +294,7 @@ export function EdlLibraryPanel({
         }
       })();
     },
-    [library, onLibraryChange, deleteClearsPlaylist, onLibraryEntryDeleted]
+    [library, onLibraryChange, deleteClearsPlaylist, onLibraryEntryDeleted, readOnly]
   );
 
   const toggleFolder = useCallback((segments: string[]) => {
@@ -518,6 +526,30 @@ export function EdlLibraryPanel({
         const isOpen = expanded.has(cKey);
         const folderDropKey = cKey;
         const isImportTarget = pathSegmentsEqual(importTargetSegments, childSegments);
+        const folderLabel = row.label ?? row.name;
+        if (readOnly) {
+          return (
+            <li key={`dir:${cKey}`} className="edl-tree-node">
+              <div className="edl-tree-line edl-tree-line--folder">
+                <button
+                  type="button"
+                  className="edl-tree-twisty"
+                  aria-expanded={isOpen}
+                  aria-label={isOpen ? "Ordner zuklappen" : "Ordner aufklappen"}
+                  disabled={busy}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    toggleFolder(childSegments);
+                  }}
+                >
+                  {isOpen ? "▼" : "▶"}
+                </button>
+                <span className="edl-tree-folder-name edl-tree-folder-name--readonly">{folderLabel}</span>
+              </div>
+              {isOpen && <ul className="edl-tree-nested">{renderTree(childSegments)}</ul>}
+            </li>
+          );
+        }
         return (
           <li key={`dir:${cKey}`} className="edl-tree-node">
             <div
@@ -593,24 +625,33 @@ export function EdlLibraryPanel({
         activeLibraryFile != null &&
         activeLibraryFile.fileName === row.name &&
         pathSegmentsEqual(activeLibraryFile.parentSegments, parentSegments);
+      const fileLabel = row.label ?? row.name;
       return (
         <li key={`file:${key}:${row.name}`} className="edl-tree-node">
           <div
             className="edl-tree-line edl-tree-line--file"
-            onContextMenu={(e) => openContextMenu(e, "file", parentSegments, row.name)}
+            onContextMenu={
+              (e) => openContextMenu(e, "file", parentSegments, row.name)
+            }
           >
             <span className="edl-tree-twisty-spacer" aria-hidden />
             <div
               className="edl-tree-file-wrap"
-              draggable={!busy}
-              onDragStart={handleFileDragStart(parentSegments, row.name)}
-              onDragEnd={handleFileDragEnd}
+              draggable={readOnly ? false : !busy}
+              onDragStart={readOnly ? undefined : handleFileDragStart(parentSegments, row.name)}
+              onDragEnd={readOnly ? undefined : handleFileDragEnd}
               title={
-                isPlaylistFile
-                  ? "Zum Verschieben ziehen · Doppelklick: gespeicherte Playlist laden"
-                  : isGemaXlsFile
-                    ? "Zum Verschieben ziehen · Doppelklick: GEMA-Liste (XLS) laden"
-                    : "Zum Verschieben ziehen · Doppelklick: EDL laden"
+                readOnly
+                  ? isPlaylistFile
+                    ? "Doppelklick: Playlist laden"
+                    : isGemaXlsFile
+                      ? "Doppelklick: GEMA-Liste (XLS) laden"
+                      : "Doppelklick: EDL laden"
+                  : isPlaylistFile
+                    ? "Zum Verschieben ziehen · Doppelklick: gespeicherte Playlist laden"
+                    : isGemaXlsFile
+                      ? "Zum Verschieben ziehen · Doppelklick: GEMA-Liste (XLS) laden"
+                      : "Zum Verschieben ziehen · Doppelklick: EDL laden"
               }
             >
               <div
@@ -651,7 +692,7 @@ export function EdlLibraryPanel({
                   }
                   aria-hidden
                 />
-                {row.name}
+                {fileLabel}
               </div>
             </div>
           </div>
@@ -664,33 +705,39 @@ export function EdlLibraryPanel({
     <>
       <div className="panel-head panel-head--edl-archive">
         <div className="panel-head-row panel-head-row--edl-archive">
-          <h2 className="panel-title">EDL- & Playlist Browser</h2>
+          <h2 className="panel-title">
+            {readOnly ? "Playlist-Browser (freigegeben)" : "EDL- & Playlist Browser"}
+          </h2>
           <div className="edl-archive-actions">
             <div className="edl-archive-actions-inline">
-              <button
-                type="button"
-                className="btn-cell"
-                onClick={() => {
-                  if (importEdlDisabled) return;
-                  onImportEdl();
-                }}
-                disabled={importEdlDisabled}
-                title={importEdlTitle}
-              >
-                Import EDL
-              </button>
-              <button
-                type="button"
-                className="btn-cell"
-                onClick={() => {
-                  if (importGemaXlsDisabled) return;
-                  onImportGemaXls();
-                }}
-                disabled={importGemaXlsDisabled}
-                title={importGemaXlsTitle}
-              >
-                Import XLS
-              </button>
+              {!readOnly && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-cell"
+                    onClick={() => {
+                      if (importEdlDisabled) return;
+                      onImportEdl();
+                    }}
+                    disabled={importEdlDisabled}
+                    title={importEdlTitle}
+                  >
+                    Import EDL
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-cell"
+                    onClick={() => {
+                      if (importGemaXlsDisabled) return;
+                      onImportGemaXls();
+                    }}
+                    disabled={importGemaXlsDisabled}
+                    title={importGemaXlsTitle}
+                  >
+                    Import XLS
+                  </button>
+                </>
+              )}
               <button
                 type="button"
                 className="btn-cell"
@@ -700,14 +747,18 @@ export function EdlLibraryPanel({
               >
                 Aktualisieren
               </button>
-              <button
-                type="button"
-                className="btn-cell"
-                onClick={openNewFolderModal}
-                disabled={!library || busy}
-              >
-                Neuer Ordner
-              </button>
+              {!readOnly && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-cell"
+                    onClick={openNewFolderModal}
+                    disabled={!library || busy}
+                  >
+                    Neuer Ordner
+                  </button>
+                </>
+              )}
               {onCollapseAblagePanel && (
                 <button
                   type="button"
@@ -740,32 +791,36 @@ export function EdlLibraryPanel({
               </button>
               {archiveMenuOpen && (
                 <div className="edl-archive-dropdown" role="menu">
-                  <button
-                    type="button"
-                    className="edl-archive-dropdown-item"
-                    role="menuitem"
-                    title={importEdlTitle}
-                    onClick={() => {
-                      if (!importEdlDisabled) onImportEdl();
-                      setArchiveMenuOpen(false);
-                    }}
-                    disabled={importEdlDisabled}
-                  >
-                    Import EDL
-                  </button>
-                  <button
-                    type="button"
-                    className="edl-archive-dropdown-item"
-                    role="menuitem"
-                    title={importGemaXlsTitle}
-                    onClick={() => {
-                      if (!importGemaXlsDisabled) onImportGemaXls();
-                      setArchiveMenuOpen(false);
-                    }}
-                    disabled={importGemaXlsDisabled}
-                  >
-                    Import XLS
-                  </button>
+                  {!readOnly && (
+                    <>
+                      <button
+                        type="button"
+                        className="edl-archive-dropdown-item"
+                        role="menuitem"
+                        title={importEdlTitle}
+                        onClick={() => {
+                          if (!importEdlDisabled) onImportEdl();
+                          setArchiveMenuOpen(false);
+                        }}
+                        disabled={importEdlDisabled}
+                      >
+                        Import EDL
+                      </button>
+                      <button
+                        type="button"
+                        className="edl-archive-dropdown-item"
+                        role="menuitem"
+                        title={importGemaXlsTitle}
+                        onClick={() => {
+                          if (!importGemaXlsDisabled) onImportGemaXls();
+                          setArchiveMenuOpen(false);
+                        }}
+                        disabled={importGemaXlsDisabled}
+                      >
+                        Import XLS
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="edl-archive-dropdown-item"
@@ -778,18 +833,20 @@ export function EdlLibraryPanel({
                   >
                     Aktualisieren
                   </button>
-                  <button
-                    type="button"
-                    className="edl-archive-dropdown-item"
-                    role="menuitem"
-                    onClick={() => {
-                      openNewFolderModal();
-                      setArchiveMenuOpen(false);
-                    }}
-                    disabled={!library || busy}
-                  >
-                    Neuer Ordner
-                  </button>
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      className="edl-archive-dropdown-item"
+                      role="menuitem"
+                      onClick={() => {
+                        openNewFolderModal();
+                        setArchiveMenuOpen(false);
+                      }}
+                      disabled={!library || busy}
+                    >
+                      Neuer Ordner
+                    </button>
+                  )}
                   {onCollapseAblagePanel && (
                     <button
                       type="button"
@@ -822,6 +879,14 @@ export function EdlLibraryPanel({
             </p>
           ) : (
             <>
+              {readOnly ? (
+                <div className="edl-library-root-readonly">
+                  <span className="edl-library-root-drop-label" aria-hidden>
+                    ⧉
+                  </span>
+                  <span>{library.label}</span>
+                </div>
+              ) : (
               <div
                 role="button"
                 tabIndex={busy ? -1 : 0}
@@ -859,10 +924,9 @@ export function EdlLibraryPanel({
                 <span className="edl-library-root-drop-label" aria-hidden>
                   ⧉
                 </span>
-                <span>
-                  Wurzel ({library.label}) — Import-Ziel · Klick wählt die Wurzel
-                </span>
+                <span>Wurzel ({library.label})</span>
               </div>
+              )}
               {listErr && <p className="edl-library-err">{listErr}</p>}
               <ul
                 className={

@@ -56,6 +56,7 @@ export async function inviteUserRequest(body: {
   lastName: string;
   email: string;
   role: UserRole;
+  companyName?: string;
 }): Promise<AppUserRecord> {
   const t = getUsersApiToken();
   if (!t) throw new Error("Nicht angemeldet.");

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { AppTheme } from "../storage/themeStorage";
 
 type MenuId = "verwaltung" | "benutzer" | null;
 
@@ -10,6 +11,12 @@ type MenuBarProps = {
   onLogout: () => void;
   onOpenUserManagement: () => void;
   onOpenStoragePaths: () => void;
+  onOpenCustomers: () => void;
+  /** Kundenansicht (Playlist wie Export) ein/aus — nur sinnvoll für Admins. */
+  customerViewActive?: boolean;
+  onToggleCustomerView?: () => void;
+  /** Zurück zur Admin-Standardansicht (Kundenansicht aus). */
+  onExitCustomerView?: () => void;
   onSystemSettings: () => void;
   /** Kurze Erfolgshinweise; optional in der Leiste rechts */
   infoMessage?: string | null;
@@ -20,6 +27,8 @@ type MenuBarProps = {
   onFontScaleReset: () => void;
   fontScaleDecDisabled: boolean;
   fontScaleIncDisabled: boolean;
+  theme: AppTheme;
+  onThemeChange: (t: AppTheme) => void;
 };
 
 export function MenuBar({
@@ -29,6 +38,10 @@ export function MenuBar({
   onLogout,
   onOpenUserManagement,
   onOpenStoragePaths,
+  onOpenCustomers,
+  customerViewActive = false,
+  onToggleCustomerView,
+  onExitCustomerView,
   onSystemSettings,
   infoMessage,
   fontScale,
@@ -37,6 +50,8 @@ export function MenuBar({
   onFontScaleReset,
   fontScaleDecDisabled,
   fontScaleIncDisabled,
+  theme,
+  onThemeChange,
 }: MenuBarProps) {
   const [open, setOpen] = useState<MenuId>(null);
   const barRef = useRef<HTMLElement>(null);
@@ -98,6 +113,49 @@ export function MenuBar({
                   type="button"
                   className="menu-item"
                   role="menuitem"
+                  disabled={!customerViewActive}
+                  title={
+                    customerViewActive
+                      ? "Admin-Ansicht mit EDL-Browser und Musikdatenbank"
+                      : "Bereits Standardansicht aktiv"
+                  }
+                  onClick={() => {
+                    if (!customerViewActive) return;
+                    setOpen(null);
+                    onExitCustomerView?.();
+                  }}
+                >
+                  Standardansicht
+                </button>
+                <button
+                  type="button"
+                  className={
+                    "menu-item" + (customerViewActive ? " menu-item--toggle-on" : "")
+                  }
+                  role="menuitem"
+                  aria-pressed={customerViewActive}
+                  onClick={() => {
+                    setOpen(null);
+                    onToggleCustomerView?.();
+                  }}
+                >
+                  Kundenansicht
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(null);
+                    onOpenCustomers();
+                  }}
+                >
+                  Kunden verwalten
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  role="menuitem"
                   onClick={() => {
                     setOpen(null);
                     onOpenUserManagement();
@@ -141,6 +199,30 @@ export function MenuBar({
         </div>
       </div>
       <div className="menubar-right">
+        <div className="menubar-theme" role="group" aria-label="Farbschema">
+          <button
+            type="button"
+            className={
+              "menubar-theme-btn" + (theme === "light" ? " menubar-theme-btn--active" : "")
+            }
+            aria-pressed={theme === "light"}
+            onClick={() => onThemeChange("light")}
+            title="Helles Design"
+          >
+            Hell
+          </button>
+          <button
+            type="button"
+            className={
+              "menubar-theme-btn" + (theme === "dark" ? " menubar-theme-btn--active" : "")
+            }
+            aria-pressed={theme === "dark"}
+            onClick={() => onThemeChange("dark")}
+            title="Dunkles Design"
+          >
+            Dunkel
+          </button>
+        </div>
         <div
           className="menubar-font-scale"
           role="group"

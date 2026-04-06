@@ -1,4 +1,4 @@
-export type UserRole = "admin" | "user";
+export type UserRole = "admin" | "user" | "customer";
 
 /** Öffentliche Nutzerdaten (Passwort-Hash nur auf dem Server). */
 export type AppUserRecord = {
@@ -9,6 +9,8 @@ export type AppUserRecord = {
   role: UserRole;
   mustChangePassword?: boolean;
   legacyLoginName?: string;
+  companyName?: string;
+  customerId?: string;
 };
 
 export function normalizeEmail(email: string): string {

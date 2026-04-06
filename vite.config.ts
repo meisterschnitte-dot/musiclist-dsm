@@ -13,6 +13,10 @@ export default defineConfig({
     port: 5273,
     strictPort: true,
     host: true,
+    /** Verhindert, dass der Browser im Dev-Modus alte Bundles aus dem Cache lädt. */
+    headers: {
+      "Cache-Control": "no-store",
+    },
     proxy: {
       "/api": {
         target: "http://127.0.0.1:5274",

@@ -265,6 +265,9 @@ export async function writeSharedMp3Buffer(relativePath: string, data: Buffer): 
     } else if (!map[k]) {
       const inf = await statTimestampsForMp3(rel);
       map[k] = inf ?? { createdAt: now, updatedAt: now };
+    } else {
+      /* Überschreiben (z. B. Transfer / ID3): Spalte „Bearbeitet“ aktualisieren */
+      map[k] = { createdAt: map[k]!.createdAt, updatedAt: now };
     }
     await writeMetadataRaw(map);
   });

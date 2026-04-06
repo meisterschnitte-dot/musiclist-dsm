@@ -15,7 +15,7 @@ export function getDataDir(): string {
   return DATA_DIR;
 }
 
-function normalizeEmail(email: string): string {
+export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
@@ -31,12 +31,14 @@ function readUsersSync(): StoredUser[] {
     for (const row of parsed) {
       if (!row || typeof row !== "object") continue;
       const o = row as Record<string, unknown>;
+      const roleRaw = o.role;
+      const role: UserRole =
+        roleRaw === "admin" || roleRaw === "user" || roleRaw === "customer" ? roleRaw : "user";
       if (
         typeof o.id === "string" &&
         typeof o.firstName === "string" &&
         typeof o.lastName === "string" &&
         typeof o.email === "string" &&
-        (o.role === "admin" || o.role === "user") &&
         typeof o.passwordHash === "string" &&
         typeof o.salt === "string"
       ) {
@@ -45,11 +47,13 @@ function readUsersSync(): StoredUser[] {
           firstName: o.firstName,
           lastName: o.lastName,
           email: normalizeEmail(o.email),
-          role: o.role,
+          role,
           passwordHash: o.passwordHash,
           salt: o.salt,
           mustChangePassword: o.mustChangePassword === true,
           legacyLoginName: typeof o.legacyLoginName === "string" ? o.legacyLoginName : undefined,
+          companyName: typeof o.companyName === "string" && o.companyName.trim() ? o.companyName.trim() : undefined,
+          customerId: typeof o.customerId === "string" && o.customerId.trim() ? o.customerId.trim() : undefined,
         });
       }
     }
@@ -113,6 +117,8 @@ export function makeUser(partial: {
   salt: string;
   mustChangePassword?: boolean;
   legacyLoginName?: string;
+  companyName?: string;
+  customerId?: string;
 }): StoredUser {
   return {
     id: partial.id,
@@ -124,5 +130,7 @@ export function makeUser(partial: {
     salt: partial.salt,
     mustChangePassword: partial.mustChangePassword,
     legacyLoginName: partial.legacyLoginName,
+    companyName: partial.companyName?.trim() || undefined,
+    customerId: partial.customerId?.trim() || undefined,
   };
 }

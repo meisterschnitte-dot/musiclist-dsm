@@ -13,7 +13,10 @@ export type AudioTags = {
   label?: string;
   hersteller?: string;
   gvlRechte?: string;
-  /** Nur UI: Zeile in EDL- und Musikdatenbank-Listen rot hervorheben; wird nicht in ID3 geschrieben. */
+  /**
+   * Nur UI: manuelle Warnung (ohne R3-Regel). Anzeige = `rechterueckrufImpliesWarnung(gvlRechte) || warnung`.
+   * Wird nicht in ID3 geschrieben.
+   */
   warnung?: boolean;
 };
 
@@ -24,9 +27,34 @@ export function hasAnyAudioTagValue(tags: AudioTags): boolean {
 }
 
 /**
+ * Rechterückruf-Feld: Einträge durch Semikolon getrennt (z. B. R6;R9;R12;R13).
+ * Liegt ein Eintrag exakt „R3“ vor (Groß/Klein), gilt die Warnung — nicht „R13“ oder „R30“.
+ */
+export function rechterueckrufImpliesWarnung(gvlRechte: string | undefined): boolean {
+  if (!gvlRechte?.trim()) return false;
+  return gvlRechte
+    .split(/[;]+/)
+    .map((s) => s.trim())
+    .some((s) => /^R3$/i.test(s));
+}
+
+/** Effektive Warnung für die Anzeige: R3-Regel oder manuell gespeicherte Warnung. */
+export function warnungEffective(tags: AudioTags): boolean {
+  return rechterueckrufImpliesWarnung(tags.gvlRechte) || tags.warnung === true;
+}
+
+/** Setzt `warnung` auf den effektiven Wert (R3 oder manuelle gespeicherte Warnung). */
+export function mergeWarnungForDisplay(merged: AudioTags): AudioTags {
+  const w = warnungEffective(merged);
+  if ((merged.warnung === true) === w) return merged;
+  return { ...merged, warnung: w ? true : false };
+}
+
+/**
  * `overlay` überschreibt Basiswerte. Leerer String in `overlay` entfernt den jeweiligen Wert
  * (z. B. wenn der Nutzer ein Feld leert, das vorher aus der Vorgabe kam).
  */
+
 export function mergeAudioTags(base: AudioTags, overlay?: AudioTags): AudioTags {
   if (!overlay) return { ...base };
   const out: AudioTags = { ...base };

@@ -13,7 +13,10 @@ function isPlaylistLibraryFileName(name: string): boolean {
 function isEdlLibraryFileName(name: string): boolean {
   const l = name.toLowerCase();
   return (
-    l.endsWith(".edl") || l.endsWith(".xls") || isPlaylistLibraryFileName(name)
+    l.endsWith(".edl") ||
+    l.endsWith(".xls") ||
+    l.endsWith(".xlsx") ||
+    isPlaylistLibraryFileName(name)
   );
 }
 

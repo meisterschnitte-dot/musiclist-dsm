@@ -1,3 +1,5 @@
+import { getUsersApiToken } from "./authToken";
+
 export type SendUserInvitePayload = {
   email: string;
   firstName: string;
@@ -7,11 +9,14 @@ export type SendUserInvitePayload = {
 };
 
 export async function sendUserInvite(payload: SendUserInvitePayload): Promise<void> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const secret =
-    import.meta.env.VITE_MUSICLIST_MAIL_SECRET?.trim() ||
-    import.meta.env.VITE_EASY_GEMA_MAIL_SECRET?.trim();
-  if (secret) headers["X-Musiclist-Mail-Secret"] = secret;
+  const token = getUsersApiToken();
+  if (!token) {
+    throw new Error("Nicht angemeldet — Begrüßungsmail nur für angemeldete Administratoren.");
+  }
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  };
 
   const res = await fetch("/api/send-user-invite", {
     method: "POST",

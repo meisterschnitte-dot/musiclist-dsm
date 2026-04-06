@@ -14,6 +14,7 @@ import {
   makeUser,
   withUserMutation,
 } from "./userStore";
+import { syncCustomerForInvite } from "./customerUserSync";
 import { toPublicUser, type PublicUser, type UserRole, type StoredUser } from "./userTypes";
 
 type BootstrapMutResult =
@@ -128,7 +129,10 @@ export function createUserApiRouter(): Router {
     const firstName = typeof req.body?.firstName === "string" ? req.body.firstName.trim() : "";
     const lastName = typeof req.body?.lastName === "string" ? req.body.lastName.trim() : "";
     const emailRaw = typeof req.body?.email === "string" ? req.body.email : "";
-    const role = req.body?.role === "admin" ? "admin" : "user";
+    const roleRaw = req.body?.role;
+    const role: UserRole =
+      roleRaw === "admin" ? "admin" : roleRaw === "customer" ? "customer" : "user";
+    const companyNameRaw = typeof req.body?.companyName === "string" ? req.body.companyName.trim() : "";
     if (!firstName || !lastName) {
       res.status(400).json({ error: "Vor- und Nachname sind erforderlich." });
       return;
@@ -138,6 +142,19 @@ export function createUserApiRouter(): Router {
       return;
     }
     const email = normalizeEmail(emailRaw);
+
+    let resolvedCustomerId: string | undefined;
+    let companyNameStored: string | undefined;
+    if (role === "customer" && companyNameRaw) {
+      companyNameStored = companyNameRaw;
+      const sync = await syncCustomerForInvite({ companyName: companyNameRaw, email });
+      if ("error" in sync) {
+        res.status(400).json({ error: sync.error });
+        return;
+      }
+      resolvedCustomerId = sync.customerId;
+    }
+
     try {
       const out = await withUserMutation<InviteMutResult>((users: StoredUser[]) => {
         if (findByEmail(users, email)) {
@@ -151,10 +168,12 @@ export function createUserApiRouter(): Router {
           firstName,
           lastName,
           email,
-          role: role as UserRole,
+          role,
           passwordHash,
           salt,
           mustChangePassword: true,
+          companyName: companyNameStored,
+          customerId: resolvedCustomerId,
         });
         return { next: [...users, u], result: { ok: true as const, user: toPublicUser(u) } };
       });

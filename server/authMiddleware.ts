@@ -30,4 +30,12 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   next();
 }
 
+export function requireCustomerRole(req: Request, res: Response, next: NextFunction): void {
+  if (req.authUser?.role !== "customer") {
+    res.status(403).json({ error: "Nur für Kundenkonten." });
+    return;
+  }
+  next();
+}
+
 export type { StoredUser } from "./userTypes";

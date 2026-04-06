@@ -8,14 +8,20 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import nodemailer from "nodemailer";
 import { INITIAL_INVITE_PASSWORD } from "./constants";
+import { bearerAuth, requireAdmin } from "./authMiddleware";
+import { createCustomerEdlRouter } from "./customerEdlRoutes";
+import {
+  registerPlaylistAssignmentForCustomer,
+  type PlaylistLibraryRef,
+} from "./customerPlaylistAssignmentsFs";
+import { removePlaylistPendingForRef } from "./customerPlaylistPendingFs";
+import { createCustomersRouter } from "./customersRoutes";
 import { createUserApiRouter } from "./userRoutes";
 import { createUserEdlRouter } from "./userEdlRoutes";
 import { createSharedTracksRouter } from "./sharedTracksRoutes";
 
 const PORT =
   Number(process.env.MUSICLIST_MAIL_PORT || process.env.EASY_GEMA_MAIL_PORT) || 5274;
-const MAIL_SECRET =
-  process.env.MUSICLIST_MAIL_SECRET?.trim() || process.env.EASY_GEMA_MAIL_SECRET?.trim();
 const DISPO_CC = process.env.SMTP_BCC?.trim() || "dispo@dsm.team";
 
 const ALLOWED_ORIGINS = (process.env.MUSICLIST_APP_URL || "http://localhost:5273")
@@ -38,26 +44,36 @@ const getTransporter = () => {
   });
 };
 
-async function sendEmail({
+async function sendEmailWithOptions({
   to,
   subject,
   text,
+  html,
+  attachments,
 }: {
-  to: string;
+  to: string | string[];
   subject: string;
   text: string;
+  html?: string;
+  attachments?: { filename: string; content: Buffer }[];
 }): Promise<void> {
   const transporter = getTransporter();
   const from = process.env.SMTP_FROM || DISPO_CC;
-  const sendBcc = to.trim().toLowerCase() !== DISPO_CC.toLowerCase() && DISPO_CC.length > 0;
+  const toList = (Array.isArray(to) ? to : [to]).map((x) => x.trim()).filter(Boolean);
+  const toStr = toList.join(", ");
+  if (!toStr) {
+    throw new Error("Keine Empfänger.");
+  }
+  const sendBcc =
+    toList.some((t) => t.toLowerCase() !== DISPO_CC.toLowerCase()) && DISPO_CC.length > 0;
 
   if (!transporter) {
     console.log(`
 --- E-MAIL (Simulation) ---
-An: ${to}
+An: ${toStr}
 ${sendBcc ? `BCC: ${DISPO_CC}\n` : ""}Von: ${from}
 Betreff: ${subject}
-${text}
+${attachments?.length ? `Anhänge: ${attachments.map((a) => a.filename).join(", ")}\n` : ""}${html ? `--- text ---\n${text}\n--- html ---\n${html}\n` : text}
 ---------------------------
 `);
     return;
@@ -65,12 +81,18 @@ ${text}
 
   await transporter.sendMail({
     from,
-    to,
+    to: toStr,
     subject,
     text,
+    ...(html?.trim() && { html: html.trim() }),
+    ...(attachments?.length && { attachments }),
     ...(sendBcc && { bcc: DISPO_CC }),
   });
-  console.log(`[Musiclist Mail] Gesendet an ${to}`);
+  console.log(`[Musiclist Mail] Gesendet an ${toStr}`);
+}
+
+async function sendEmail(props: { to: string; subject: string; text: string }): Promise<void> {
+  return sendEmailWithOptions(props);
 }
 
 const app = express();
@@ -88,7 +110,7 @@ app.use((_req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "25mb" }));
 
 // Rate limiting for auth endpoints
 const authLimiter = rateLimit({
@@ -103,23 +125,89 @@ app.use("/api/auth/bootstrap", authLimiter);
 
 app.use("/api", createUserApiRouter());
 app.use("/api", createUserEdlRouter());
+app.use("/api", createCustomerEdlRouter());
 app.use("/api", createSharedTracksRouter());
+app.use("/api", createCustomersRouter());
 
-app.post("/api/send-user-invite", async (req, res) => {
+app.post("/api/send-mail", bearerAuth, requireAdmin, async (req, res) => {
   try {
-    if (MAIL_SECRET) {
-      const h =
-        req.headers["x-musiclist-mail-secret"] ?? req.headers["x-easy-gema-mail-secret"];
-      if (h !== MAIL_SECRET) {
-        return res.status(403).json({ error: "Ungültiges API-Geheimnis." });
+    const body = req.body as Record<string, unknown>;
+    const toRaw = body.to;
+    const to =
+      Array.isArray(toRaw)
+        ? toRaw.map((x) => String(x).trim()).filter(Boolean)
+        : typeof toRaw === "string"
+          ? [toRaw.trim()].filter(Boolean)
+          : [];
+    const subject = typeof body.subject === "string" ? body.subject.trim() : "";
+    const text = typeof body.text === "string" ? body.text : "";
+    const htmlRaw = body.html;
+    const html = typeof htmlRaw === "string" && htmlRaw.trim() ? htmlRaw.trim() : undefined;
+    const attB64 = typeof body.attachmentBase64 === "string" ? body.attachmentBase64 : "";
+    const attName =
+      typeof body.attachmentFileName === "string" && body.attachmentFileName.trim()
+        ? body.attachmentFileName.trim().replace(/[\\/]/g, "_")
+        : "export.xlsx";
+
+    if (!to.length) {
+      return res.status(400).json({ error: "Mindestens einen Empfänger angeben." });
+    }
+    if (!subject) {
+      return res.status(400).json({ error: "Betreff ist erforderlich." });
+    }
+    if (to.length > 80) {
+      return res.status(400).json({ error: "Zu viele Empfänger (max. 80)." });
+    }
+
+    const attachments =
+      attB64.length > 0
+        ? [{ filename: attName, content: Buffer.from(attB64, "base64") }]
+        : undefined;
+
+    const customerId = typeof body.customerId === "string" ? body.customerId.trim() : "";
+    const libraryOwnerRaw = typeof body.libraryOwnerUserId === "string" ? body.libraryOwnerUserId.trim() : "";
+    const libraryOwnerUserId = libraryOwnerRaw || req.authUser?.id || "";
+    const playlistFileName = typeof body.playlistFileName === "string" ? body.playlistFileName.trim() : "";
+    const psRaw = body.parentSegments;
+    const parentSegments = Array.isArray(psRaw)
+      ? psRaw.filter((x): x is string => typeof x === "string")
+      : [];
+    /** Zuerst persistieren — auch wenn SMTP später fehlschlägt, sieht der Kunde die Freigabe. */
+    if (customerId && libraryOwnerUserId && playlistFileName) {
+      try {
+        const ref: PlaylistLibraryRef = {
+          libraryOwnerUserId,
+          parentSegments,
+          fileName: playlistFileName,
+        };
+        await registerPlaylistAssignmentForCustomer(customerId, ref);
+        await removePlaylistPendingForRef(ref);
+      } catch (e) {
+        console.error("[Musiclist Mail] playlist assignment:", e);
+        return res.status(500).json({
+          error: e instanceof Error ? e.message : "Playlist-Zuweisung fehlgeschlagen.",
+        });
       }
     }
 
-    const { email, firstName, lastName, roleLabel, appUrl } = req.body as Record<string, unknown>;
+    await sendEmailWithOptions({ to, subject, text, html, attachments });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[Musiclist Mail] send-mail:", e);
+    return res.status(500).json({
+      error: e instanceof Error ? e.message : "E-Mail-Versand fehlgeschlagen.",
+    });
+  }
+});
+
+/** Nur angemeldete Admins — kein separates VITE_MUSICLIST_MAIL_SECRET nötig. */
+app.post("/api/send-user-invite", bearerAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email, firstName, lastName, appUrl } = req.body as Record<string, unknown>;
     const em = typeof email === "string" ? email.trim() : "";
     const fn = typeof firstName === "string" ? firstName.trim().replace(/[\r\n]/g, "") : "";
     const ln = typeof lastName === "string" ? lastName.trim().replace(/[\r\n]/g, "") : "";
-    const role = typeof roleLabel === "string" ? roleLabel.trim().replace(/[\r\n]/g, "") : "Benutzer";
     const baseUrl =
       typeof appUrl === "string" && appUrl.trim()
         ? appUrl.trim().replace(/\/$/, "")
@@ -133,24 +221,23 @@ app.post("/api/send-user-invite", async (req, res) => {
       return res.status(400).json({ error: "E-Mail, Vorname und Nachname sind erforderlich." });
     }
 
-    const subject = "Einladung zu Musiclist";
+    const subject = "Willkommen bei Musiclist — Deine Zugangsdaten";
     const text = `Hallo ${fn} ${ln},
 
-Sie wurden als ${role} für die Anwendung Musiclist eingeladen.
+willkommen bei Musiclist! Wir haben ein Benutzerkonto für Dich angelegt.
 
-Ihre Zugangsdaten:
-E-Mail (Anmeldename): ${em}
-Initiales Passwort: ${INITIAL_INVITE_PASSWORD}
+Zugangsdaten:
+• E-Mail-Adresse (Anmeldename): ${em}
+• Initialpasswort: ${INITIAL_INVITE_PASSWORD}
 
-WICHTIG — Sicherheit:
-Bitte ändern Sie dieses Passwort unmittelbar nach der ersten Anmeldung (über eine künftige Passwort-Funktion oder durch Rücksprache mit Ihrem Administrator).
+Wichtig: Bitte ändere dieses Initialpasswort direkt beim ersten Login. Die App fordert dich dazu auf, sobald du dich das erste Mal anmeldest.
 
-Anwendung öffnen: ${baseUrl}
+App öffnen: ${baseUrl}
 
-Bei Fragen wenden Sie sich an Ihren Administrator.
+Bei Fragen wende dich gerne an mich.
 
 Viele Grüße
-Ihr Team`;
+Oliver Driemel`;
 
     await sendEmail({ to: em, subject, text });
     return res.json({ ok: true });
@@ -168,6 +255,6 @@ app.get("/api/health", (_req, res) => {
 
 app.listen(PORT, () => {
   console.log(
-    `[Musiclist API] http://localhost:${PORT} — Benutzer-API unter /api/*, Mail: POST /api/send-user-invite`
+    `[Musiclist API] http://localhost:${PORT} — /api/* (Benutzer, Kunden, Mail send-mail)`
   );
 });

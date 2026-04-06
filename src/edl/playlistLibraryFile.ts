@@ -1,4 +1,5 @@
 import type { PlaylistEntry } from "./types";
+import type { AudioTags } from "../audio/audioTags";
 
 /** Gespeicherte Playlist im EDL- & Playlist Browser (kein Roh-EDL mehr). */
 export const PLAYLIST_LIBRARY_FILE_EXT = ".list";
@@ -33,6 +34,8 @@ export type PersistedPlaylistLibraryV1 = {
   v: 1;
   displayTitle: string | null;
   playlist: PlaylistEntry[];
+  /** Optionale Tag-Overlays je Zeilen-ID (für Kundenfreigaben ohne lokale Tag-Datenbank). */
+  tagsByRowId?: Record<string, AudioTags>;
   /** Zeitpunkt, zu dem die MP3-Verknüpfungen festgeschrieben wurden */
   tracksLinkedAtIso: string;
 };
@@ -51,6 +54,31 @@ function isPlaylistEntry(x: unknown): x is PlaylistEntry {
     typeof o.sourceKey === "string" &&
     (o.linkedTrackFileName === undefined || typeof o.linkedTrackFileName === "string")
   );
+}
+
+function normalizeAudioTags(raw: unknown): AudioTags | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const out: AudioTags = {};
+  const strKeys: Array<Exclude<keyof AudioTags, "warnung">> = [
+    "songTitle",
+    "artist",
+    "album",
+    "year",
+    "comment",
+    "composer",
+    "isrc",
+    "labelcode",
+    "label",
+    "hersteller",
+    "gvlRechte",
+  ];
+  for (const k of strKeys) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) out[k] = v.trim();
+  }
+  if (o.warnung === true) out.warnung = true;
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 export function parsePlaylistLibraryFile(text: string): PersistedPlaylistLibraryV1 {
@@ -93,7 +121,19 @@ export function parsePlaylistLibraryFile(text: string): PersistedPlaylistLibrary
     typeof o.tracksLinkedAtIso === "string" && o.tracksLinkedAtIso.trim()
       ? o.tracksLinkedAtIso.trim()
       : new Date().toISOString();
-  return { v: 1, displayTitle, playlist, tracksLinkedAtIso };
+  let tagsByRowId: Record<string, AudioTags> | undefined;
+  if (o.tagsByRowId && typeof o.tagsByRowId === "object") {
+    const map = o.tagsByRowId as Record<string, unknown>;
+    const next: Record<string, AudioTags> = {};
+    for (const [rowId, rawTags] of Object.entries(map)) {
+      if (!rowId.trim()) continue;
+      const tags = normalizeAudioTags(rawTags);
+      if (!tags) continue;
+      next[rowId] = tags;
+    }
+    if (Object.keys(next).length > 0) tagsByRowId = next;
+  }
+  return { v: 1, displayTitle, playlist, tagsByRowId, tracksLinkedAtIso };
 }
 
 export function serializePlaylistLibraryFile(data: PersistedPlaylistLibraryV1): string {
