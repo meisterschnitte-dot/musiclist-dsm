@@ -473,6 +473,9 @@ function dupDraftFormToPersistedTags(draft: AudioTags): AudioTags {
   return mergeWarnungForDisplay(o);
 }
 
+/** Schmalere Eingaben im Duplikat-Dialog (mehr Platz für Titel/Interpret/Album …). */
+const DUP_MODAL_COMPACT_FIELDS = new Set<keyof AudioTags>(["labelcode", "isrc", "gvlRechte"]);
+
 function DupModalTagFields({
   tags,
   onTagsChange,
@@ -492,10 +495,13 @@ function DupModalTagFields({
         const diff =
           diffBaseline !== undefined && dupModalNorm(diffBaseline[k]) !== dupModalNorm(val);
         const fid = `${fieldIdPrefix}-${String(k)}`;
+        const compact = DUP_MODAL_COMPACT_FIELDS.has(k);
         return (
           <div
             key={k}
-            className={`modal-dup-tag-field${diff ? " modal-dup-tag-field--diff" : ""}`}
+            className={`modal-dup-tag-field${compact ? " modal-dup-tag-field--compact" : ""}${
+              diff ? " modal-dup-tag-field--diff" : ""
+            }`}
           >
             <label className="modal-dup-tag-form-label" htmlFor={fid}>
               {AUDIO_TAG_FIELD_LABELS[k]}
@@ -710,6 +716,8 @@ export default function App() {
   const [dupModal, setDupModal] = useState<DupModalState | null>(null);
   const [dupTagDraftProposed, setDupTagDraftProposed] = useState<AudioTags>({});
   const [dupTagDraftCandidates, setDupTagDraftCandidates] = useState<Record<string, AudioTags>>({});
+  /** Bei mehreren Treffern: welche Pfade beim „Überschreiben“ ersetzt werden sollen. */
+  const [dupOverwritePick, setDupOverwritePick] = useState<Record<string, boolean>>({});
   /** Testumgebung: nach erstem Dialog dieselbe Entscheidung für alle weiteren Konflikte (Pfad jeweils = erster Treffer). */
   const dupApplyAllRef = useRef<"identical" | "different" | null>(null);
   const [dupApplyAllChecked, setDupApplyAllChecked] = useState(false);
@@ -1544,7 +1552,13 @@ export default function App() {
     const { proposed, candidates } = initDupModalTagDrafts(dupModal);
     setDupTagDraftProposed(proposed);
     setDupTagDraftCandidates(candidates);
+    setDupOverwritePick(Object.fromEntries(dupModal.candidates.map((c) => [c.existingFileName, false])));
   }, [dupModal]);
+
+  const dupModalMultiHits = dupModal != null && dupModal.candidates.length > 1;
+  const dupOverwriteButtonDisabled =
+    dupModalMultiHits &&
+    !dupModal!.candidates.some((c) => dupOverwritePick[c.existingFileName]);
 
   useEffect(() => {
     if (!mp3DbToolsMenuOpen) return;
@@ -2038,6 +2052,7 @@ export default function App() {
           identicalChoiceIndices,
           duplicateProposedTagsByIndex,
           duplicateIdenticalFileTagsByIndex,
+          duplicateOverwriteFileTagsByIndex,
         } = await exportFakeTracksToSharedStorage(
           playlist,
           sink,
@@ -2124,7 +2139,9 @@ export default function App() {
           (duplicateProposedTagsByIndex &&
             Object.keys(duplicateProposedTagsByIndex).length > 0) ||
           (duplicateIdenticalFileTagsByIndex &&
-            Object.keys(duplicateIdenticalFileTagsByIndex).length > 0);
+            Object.keys(duplicateIdenticalFileTagsByIndex).length > 0) ||
+          (duplicateOverwriteFileTagsByIndex &&
+            Object.keys(duplicateOverwriteFileTagsByIndex).length > 0);
 
         if (playlistTagCopiesFromDb.length || exportPersistToFileKeys.length || hasDupModalTags) {
           setTagStore((prev) => {
@@ -2147,6 +2164,13 @@ export default function App() {
               const fk = fileTagKey(ent.relativePath);
               const fileBase = defaultTagsFromPlaylistTitle(ent.relativePath);
               next[fk] = overlayFromForm(fileBase, ent.tags);
+            }
+            for (const [, ow] of Object.entries(duplicateOverwriteFileTagsByIndex ?? {})) {
+              for (const rel of ow.relativePaths) {
+                const fk = fileTagKey(rel);
+                const fileBase = defaultTagsFromPlaylistTitle(rel);
+                next[fk] = overlayFromForm(fileBase, ow.tags);
+              }
             }
             persistTagStore(next);
             return next;
@@ -5295,7 +5319,33 @@ export default function App() {
                         <span className="modal-dup-filename">{dupModal.proposedFileName}</span>
                       </div>
                     </div>
-                    <div className="modal-dup-cell modal-dup-cell--action modal-dup-cell--action-spacer" />
+                    <div className="modal-dup-cell modal-dup-cell--action">
+                      <button
+                        type="button"
+                        className="btn-modal"
+                        disabled={dupOverwriteButtonDisabled}
+                        title={
+                          dupOverwriteButtonDisabled
+                            ? "Bei mehreren Treffern mindestens einen Treffer per Checkbox zum Überschreiben auswählen."
+                            : "Bestehende Datei(en) durch neue MP3 mit den Tags von „Neu“ ersetzen."
+                        }
+                        onClick={() => {
+                          if (!dupModal) return;
+                          const paths = dupModalMultiHits
+                            ? dupModal.candidates
+                                .filter((c) => dupOverwritePick[c.existingFileName])
+                                .map((c) => c.existingFileName)
+                            : [dupModal.candidates[0].existingFileName];
+                          resolveDuplicate({
+                            action: "overwrite",
+                            relativePaths: paths,
+                            proposedTagsEdited: dupDraftFormToPersistedTags(dupTagDraftProposed),
+                          });
+                        }}
+                      >
+                        Überschreibe alten Datensatz
+                      </button>
+                    </div>
                   </div>
                   <DupModalTagFields
                     fieldIdPrefix="dup-new"
@@ -5316,16 +5366,34 @@ export default function App() {
                       </p>
                       <div className="modal-dup-grid modal-dup-grid--inline">
                         <div className="modal-dup-pathfile-col">
-                          <div className="modal-dup-path-filename-line">
-                            <span
-                              className="modal-dup-dir"
-                              title={sp.dir.trim() ? sp.dir : undefined}
-                            >
-                              {sp.dir.trim() ? sp.dir : "—"}
-                            </span>
-                            <span className="modal-dup-filename">
-                              {sp.base || basenamePath(c.existingFileName)}
-                            </span>
+                          <div className="modal-dup-path-hit-line">
+                            {dupModalMultiHits && (
+                              <input
+                                type="checkbox"
+                                className="modal-dup-overwrite-cb"
+                                checked={dupOverwritePick[c.existingFileName] ?? false}
+                                onChange={(e) =>
+                                  setDupOverwritePick((prev) => ({
+                                    ...prev,
+                                    [c.existingFileName]: e.target.checked,
+                                  }))
+                                }
+                                aria-label={`Treffer „${
+                                  sp.base || basenamePath(c.existingFileName)
+                                }“ zum Überschreiben mit neuem Datensatz auswählen`}
+                              />
+                            )}
+                            <div className="modal-dup-path-filename-line">
+                              <span
+                                className="modal-dup-dir"
+                                title={sp.dir.trim() ? sp.dir : undefined}
+                              >
+                                {sp.dir.trim() ? sp.dir : "—"}
+                              </span>
+                              <span className="modal-dup-filename">
+                                {sp.base || basenamePath(c.existingFileName)}
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="modal-dup-cell modal-dup-cell--action">

@@ -75,6 +75,12 @@ export type DuplicateChoice =
       proposedTagsEdited: AudioTags;
       /** Tags für die bestehende MP3 — wie im Dialog bearbeitet (ID3 wird aktualisiert). */
       existingFileTagsEdited: AudioTags;
+    }
+  | {
+      /** Bestehende Datei(en) am gleichen Pfad durch neue Fake-MP3 + Tags aus „Neu“ ersetzen. */
+      action: "overwrite";
+      relativePaths: string[];
+      proposedTagsEdited: AudioTags;
     };
 
 /** Alle `.mp3`-Pfade relativ zum Speicherort-Root (rekursiv, Ordnerübergreifend). */
@@ -155,6 +161,24 @@ async function rewriteLocalMp3Id3(
   await writable.close();
 }
 
+/** Schreibt eine komplette MP3-Blob an einen relativen Pfad unter `rootDir` (überschreibt die Datei). */
+async function writeBlobToRelativeMp3Path(
+  rootDir: FileSystemDirectoryHandle,
+  relativePath: string,
+  blob: Blob
+): Promise<void> {
+  const parts = relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length === 0) return;
+  let dir = rootDir;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i]!, { create: false });
+  }
+  const fh = await dir.getFileHandle(parts[parts.length - 1]!, { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(await blob.arrayBuffer());
+  await writable.close();
+}
+
 async function readTagsFromLocalMp3Path(
   rootDir: FileSystemDirectoryHandle,
   relativePath: string
@@ -229,6 +253,11 @@ export type ExportTracksResult = {
   duplicateProposedTagsByIndex?: Record<number, AudioTags>;
   /** Bei „identisch“: bestehende Datei — ID3 wurde geschrieben; f:-Overlay nachziehen. */
   duplicateIdenticalFileTagsByIndex?: Record<number, { relativePath: string; tags: AudioTags }>;
+  /** Bei „Überschreiben“: überschriebene Pfade + Tag-Stand (f:-Overlay). */
+  duplicateOverwriteFileTagsByIndex?: Record<
+    number,
+    { relativePaths: string[]; tags: AudioTags }
+  >;
 };
 
 /**
@@ -246,6 +275,10 @@ export async function exportFakeTracksToTracksFolder(
   const duplicateIdenticalFileTagsByIndex: Record<
     number,
     { relativePath: string; tags: AudioTags }
+  > = {};
+  const duplicateOverwriteFileTagsByIndex: Record<
+    number,
+    { relativePaths: string[]; tags: AudioTags }
   > = {};
 
   const folderStem =
@@ -311,6 +344,18 @@ export async function exportFakeTracksToTracksFolder(
           tags: exMerged,
         };
         await rewriteLocalMp3Id3(tracksDir, choice.existingFileName, choice.existingFileTagsEdited);
+      } else if (choice.action === "overwrite") {
+        const paths = choice.relativePaths;
+        let blob: Blob = createFakeMp3Blob();
+        if (hasAnyAudioTagValue(propMerged)) {
+          blob = await embedId3InMp3Blob(blob, propMerged);
+        }
+        for (const rel of paths) {
+          await writeBlobToRelativeMp3Path(tracksDir, rel, blob);
+          usedBasenamesLower.add(basenamePath(rel).toLowerCase());
+        }
+        duplicateOverwriteFileTagsByIndex[index] = { relativePaths: [...paths], tags: propMerged };
+        storedRelativePath = paths[0]!;
       } else {
         const newBasename = await nextFreeMp3Name(targetDir, stem, usedBasenamesLower);
         let blob: Blob = createFakeMp3Blob();
@@ -345,6 +390,10 @@ export async function exportFakeTracksToTracksFolder(
     duplicateIdenticalFileTagsByIndex:
       Object.keys(duplicateIdenticalFileTagsByIndex).length > 0
         ? duplicateIdenticalFileTagsByIndex
+        : undefined,
+    duplicateOverwriteFileTagsByIndex:
+      Object.keys(duplicateOverwriteFileTagsByIndex).length > 0
+        ? duplicateOverwriteFileTagsByIndex
         : undefined,
   };
 }
@@ -404,6 +453,10 @@ export async function exportFakeTracksToSharedStorage(
   const duplicateIdenticalFileTagsByIndex: Record<
     number,
     { relativePath: string; tags: AudioTags }
+  > = {};
+  const duplicateOverwriteFileTagsByIndex: Record<
+    number,
+    { relativePaths: string[]; tags: AudioTags }
   > = {};
 
   const folderStem =
@@ -470,6 +523,18 @@ export async function exportFakeTracksToSharedStorage(
           tags: exMerged,
         };
         await rewriteSharedMp3Id3(choice.existingFileName, choice.existingFileTagsEdited, sink);
+      } else if (choice.action === "overwrite") {
+        const paths = choice.relativePaths;
+        let blob: Blob = createFakeMp3Blob();
+        if (hasAnyAudioTagValue(propMerged)) {
+          blob = await embedId3InMp3Blob(blob, propMerged);
+        }
+        for (const rel of paths) {
+          await sink.writeMp3Blob(rel, blob);
+          usedBasenamesLower.add(basenamePath(rel).toLowerCase());
+        }
+        duplicateOverwriteFileTagsByIndex[index] = { relativePaths: [...paths], tags: propMerged };
+        storedRelativePath = paths[0]!;
       } else {
         const newBasename = await nextFreeMp3NameShared(
           prefixRel,
@@ -514,6 +579,10 @@ export async function exportFakeTracksToSharedStorage(
     duplicateIdenticalFileTagsByIndex:
       Object.keys(duplicateIdenticalFileTagsByIndex).length > 0
         ? duplicateIdenticalFileTagsByIndex
+        : undefined,
+    duplicateOverwriteFileTagsByIndex:
+      Object.keys(duplicateOverwriteFileTagsByIndex).length > 0
+        ? duplicateOverwriteFileTagsByIndex
         : undefined,
   };
 }
