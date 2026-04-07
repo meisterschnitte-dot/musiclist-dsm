@@ -54,6 +54,7 @@ function readUsersSync(): StoredUser[] {
           legacyLoginName: typeof o.legacyLoginName === "string" ? o.legacyLoginName : undefined,
           companyName: typeof o.companyName === "string" && o.companyName.trim() ? o.companyName.trim() : undefined,
           customerId: typeof o.customerId === "string" && o.customerId.trim() ? o.customerId.trim() : undefined,
+          active: o.active === false ? false : true,
         });
       }
     }
@@ -119,6 +120,7 @@ export function makeUser(partial: {
   legacyLoginName?: string;
   companyName?: string;
   customerId?: string;
+  active?: boolean;
 }): StoredUser {
   return {
     id: partial.id,
@@ -132,5 +134,15 @@ export function makeUser(partial: {
     legacyLoginName: partial.legacyLoginName,
     companyName: partial.companyName?.trim() || undefined,
     customerId: partial.customerId?.trim() || undefined,
+    active: partial.active === false ? false : true,
   };
+}
+
+export function isUserActive(u: StoredUser): boolean {
+  return u.active !== false;
+}
+
+/** Administratoren, die sich anmelden dürfen (aktiv). */
+export function countActiveAdmins(users: StoredUser[]): number {
+  return users.filter((u) => u.role === "admin" && isUserActive(u)).length;
 }

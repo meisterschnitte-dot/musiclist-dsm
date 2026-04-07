@@ -7,6 +7,7 @@ import {
   ensureUserEdlRoot,
   listUserEdlDirectory,
   mkdirUserEdl,
+  moveUserEdlDirectory,
   moveUserEdlFile,
   readUserEdlFileBuffer,
   readUserEdlFileText,
@@ -151,6 +152,27 @@ export function createUserEdlRouter(): Router {
         return;
       }
       await moveUserEdlFile(uid, fromSegments, fileName, toSegments);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : "Verschieben fehlgeschlagen." });
+    }
+  });
+
+  r.post("/me/edl/move-directory", async (req: Request, res: Response) => {
+    try {
+      const uid = req.authUser!.id;
+      const fromParentSegments = Array.isArray(req.body?.fromParentSegments)
+        ? (req.body.fromParentSegments as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      const toParentSegments = Array.isArray(req.body?.toParentSegments)
+        ? (req.body.toParentSegments as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      const folderName = typeof req.body?.folderName === "string" ? req.body.folderName : "";
+      if (!folderName) {
+        res.status(400).json({ error: "folderName fehlt." });
+        return;
+      }
+      await moveUserEdlDirectory(uid, fromParentSegments, folderName, toParentSegments);
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : "Verschieben fehlgeschlagen." });

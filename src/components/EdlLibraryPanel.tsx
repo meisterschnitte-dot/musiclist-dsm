@@ -33,7 +33,9 @@ type ContextMenuState = {
   name: string;
 };
 
-type DragMovePayload = { parentSegments: string[]; fileName: string };
+type DragMovePayload =
+  | { kind: "file"; parentSegments: string[]; fileName: string }
+  | { kind: "directory"; parentSegments: string[]; folderName: string };
 
 export type LibraryDeleteInfo =
   | { kind: "file"; parentSegments: string[]; fileName: string }
@@ -73,6 +75,12 @@ type Props = {
     oldFolderName: string,
     newFolderName: string
   ) => void;
+  /** Nach Verschieben eines Ordners: Import-Ziel und geöffnete Datei anpassen. */
+  onEdlFolderMoved?: (
+    fromParentSegments: string[],
+    folderName: string,
+    toParentSegments: string[]
+  ) => void;
   /** Datei, die aktuell aus dem Browser in der Playlist geöffnet ist — bleibt markiert bis zur nächsten Browser-/Import-Aktion. */
   activeLibraryFile?: { parentSegments: string[]; fileName: string } | null;
   /** Nur lesen: keine Importe, kein Löschen, kein Verschieben (Kundenkonten). */
@@ -96,6 +104,7 @@ export function EdlLibraryPanel({
   importGemaXlsTitle,
   importGemaXlsDisabled = false,
   onEdlFolderRenamed,
+  onEdlFolderMoved,
   activeLibraryFile = null,
   readOnly = false,
 }: Props) {
@@ -320,7 +329,7 @@ export function EdlLibraryPanel({
     setBusy(true);
     setListErr(null);
     try {
-      await library.mkdir([], name);
+      await library.mkdir(importTargetSegments ?? [], name);
       setNewFolderOpen(false);
       setNewFolderName("");
       onLibraryChange?.();
@@ -329,7 +338,7 @@ export function EdlLibraryPanel({
     } finally {
       setBusy(false);
     }
-  }, [library, newFolderName, onLibraryChange]);
+  }, [library, newFolderName, importTargetSegments, onLibraryChange]);
 
   useEffect(() => {
     if (!renameFolderCtx) return;
@@ -401,7 +410,7 @@ export function EdlLibraryPanel({
         return;
       }
       e.stopPropagation();
-      dragPayloadRef.current = { parentSegments, fileName };
+      dragPayloadRef.current = { kind: "file", parentSegments, fileName };
       e.dataTransfer.setData("application/x-edl-library-file", fileName);
       e.dataTransfer.effectAllowed = "move";
       setDraggingFile(true);
@@ -409,14 +418,29 @@ export function EdlLibraryPanel({
     [library, busy]
   );
 
-  const handleFileDragEnd = useCallback(() => {
+  const handleFolderDragStart = useCallback(
+    (parentSegments: string[], folderName: string) => (e: DragEvent) => {
+      if (!library || busy) {
+        e.preventDefault();
+        return;
+      }
+      e.stopPropagation();
+      dragPayloadRef.current = { kind: "directory", parentSegments, folderName };
+      e.dataTransfer.setData("application/x-edl-library-dir", folderName);
+      e.dataTransfer.effectAllowed = "move";
+      setDraggingFile(true);
+    },
+    [library, busy]
+  );
+
+  const handleLibraryDragEnd = useCallback(() => {
     dragPayloadRef.current = null;
     setDraggingFile(false);
     setDropHighlight(null);
   }, []);
 
-  const runMove = useCallback(
-    async (toSegments: string[], payload: DragMovePayload) => {
+  const runMoveFile = useCallback(
+    async (toSegments: string[], payload: Extract<DragMovePayload, { kind: "file" }>) => {
       if (!library) return;
       setBusy(true);
       setListErr(null);
@@ -432,6 +456,44 @@ export function EdlLibraryPanel({
     [library, onLibraryChange]
   );
 
+  const runMoveDirectory = useCallback(
+    async (toParentSegments: string[], payload: Extract<DragMovePayload, { kind: "directory" }>) => {
+      if (!library) return;
+      if (
+        payload.parentSegments.length === toParentSegments.length &&
+        payload.parentSegments.every((s, i) => s === toParentSegments[i])
+      ) {
+        return;
+      }
+      setBusy(true);
+      setListErr(null);
+      try {
+        await library.moveDirectory(payload.parentSegments, payload.folderName, toParentSegments);
+        const oldPath = [...payload.parentSegments, payload.folderName];
+        const newPath = [...toParentSegments, payload.folderName];
+        setExpanded((prev) => {
+          const next = new Set<string>();
+          for (const k of prev) {
+            try {
+              const segs = JSON.parse(k) as string[];
+              next.add(JSON.stringify(replaceFolderPathPrefix(segs, oldPath, newPath)));
+            } catch {
+              next.add(k);
+            }
+          }
+          return next;
+        });
+        onEdlFolderMoved?.(payload.parentSegments, payload.folderName, toParentSegments);
+        onLibraryChange?.();
+      } catch (e) {
+        setListErr(e instanceof Error ? e.message : "Verschieben fehlgeschlagen.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [library, onEdlFolderMoved, onLibraryChange]
+  );
+
   const handleDropOnFolder = useCallback(
     (destSegments: string[]) => async (e: DragEvent) => {
       e.preventDefault();
@@ -441,12 +503,18 @@ export function EdlLibraryPanel({
       setDropHighlight(null);
       if (!library || !payload) return;
       try {
-        await runMove(destSegments, payload);
+        if (payload.kind === "file") {
+          await runMoveFile(destSegments, payload);
+        } else {
+          const srcPath = [...payload.parentSegments, payload.folderName];
+          if (pathKey(destSegments) === pathKey(srcPath)) return;
+          await runMoveDirectory(destSegments, payload);
+        }
       } catch (err) {
         setListErr(err instanceof Error ? err.message : "Ordner nicht erreichbar.");
       }
     },
-    [library, runMove]
+    [library, runMoveFile, runMoveDirectory]
   );
 
   const handleDropOnRoot = useCallback(
@@ -456,9 +524,15 @@ export function EdlLibraryPanel({
       const payload = dragPayloadRef.current;
       setDropHighlight(null);
       if (!library || !payload) return;
-      await runMove([], payload);
+      if (payload.kind === "file") {
+        await runMoveFile([], payload);
+      } else {
+        const srcPath = [...payload.parentSegments, payload.folderName];
+        if (pathKey([]) === pathKey(srcPath)) return;
+        await runMoveDirectory([], payload);
+      }
     },
-    [library, runMove]
+    [library, runMoveFile, runMoveDirectory]
   );
 
   const folderDragEnter = useCallback((destKey: string) => {
@@ -573,12 +647,15 @@ export function EdlLibraryPanel({
                 role="button"
                 tabIndex={busy ? -1 : 0}
                 aria-pressed={isImportTarget}
+                draggable={!busy}
                 className={
                   "edl-tree-folder-name" +
                   (dropHighlight === folderDropKey ? " edl-tree-folder-name--drop-over" : "") +
                   (isImportTarget ? " edl-tree-folder-name--import-target" : "")
                 }
-                title="Klick: Import-Ziel wählen oder aufheben · Ziehen: EDL hierher verschieben"
+                title="Klick: Import-Ziel wählen oder aufheben · Ziehen: Datei oder Ordner hierher verschieben"
+                onDragStart={handleFolderDragStart(parentSegments, row.name)}
+                onDragEnd={handleLibraryDragEnd}
                 onClick={(ev) => {
                   ev.preventDefault();
                   ev.stopPropagation();
@@ -639,7 +716,7 @@ export function EdlLibraryPanel({
               className="edl-tree-file-wrap"
               draggable={readOnly ? false : !busy}
               onDragStart={readOnly ? undefined : handleFileDragStart(parentSegments, row.name)}
-              onDragEnd={readOnly ? undefined : handleFileDragEnd}
+              onDragEnd={readOnly ? undefined : handleLibraryDragEnd}
               title={
                 readOnly
                   ? isPlaylistFile
@@ -896,7 +973,7 @@ export function EdlLibraryPanel({
                   (dropHighlight === "__root__" ? " edl-library-root-drop--over" : "") +
                   (importTargetSegments === null ? " edl-library-root-drop--import-target" : "")
                 }
-                title="Klick: Import-Ziel Wurzel · Ziehen: EDL in die oberste Ebene"
+                title="Klick: Import-Ziel Wurzel · Ziehen: Datei oder Ordner in die oberste Ebene"
                 onClick={(ev) => {
                   ev.preventDefault();
                   if (busy) return;
@@ -1004,7 +1081,11 @@ export function EdlLibraryPanel({
             <h2 id="edl-new-folder-title" className="modal-title">
               Neuer Ordner
             </h2>
-            <p className="modal-lead">Ordner wird in der Wurzel des EDL- & Playlist Browsers angelegt.</p>
+            <p className="modal-lead">
+              {importTargetSegments === null || importTargetSegments.length === 0
+                ? "Der Ordner wird in der Wurzel des EDL- & Playlist Browsers angelegt."
+                : `Der Ordner wird unter „${importTargetSegments.join(" › ")}“ angelegt (markiertes Import-Ziel).`}
+            </p>
             <form
               className="edl-new-folder-form"
               onSubmit={(e) => {

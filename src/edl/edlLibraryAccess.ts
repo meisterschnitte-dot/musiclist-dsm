@@ -23,6 +23,8 @@ export type EdlLibraryAccess = {
   writeBinary(segments: string[], fileName: string, data: ArrayBuffer): Promise<void>;
   mkdir(parentSegments: string[], name: string): Promise<void>;
   moveFile(fromSegments: string[], fileName: string, toSegments: string[]): Promise<void>;
+  /** Ordner (`fromParent` + `folderName`) unter `toParent` ablegen. */
+  moveDirectory(fromParentSegments: string[], folderName: string, toParentSegments: string[]): Promise<void>;
   deleteFile(segments: string[], fileName: string): Promise<void>;
   deleteDirectory(pathSegments: string[]): Promise<void>;
   renameDirectory(parentSegments: string[], oldName: string, newName: string): Promise<void>;

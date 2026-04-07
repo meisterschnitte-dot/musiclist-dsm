@@ -12,6 +12,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
     "browser-id3-writer": "^6.3.1",
     "cors": "^2.8.5",
@@ -19,6 +20,8 @@
     "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "express-rate-limit": "^8.3.2",
+    "extract-zip": "^2.0.1",
+    "multer": "^2.1.1",
     "music-metadata": "^11.12.3",
     "nodemailer": "^8.0.4",
     "pdfjs-dist": "^5.6.205",
@@ -27,9 +30,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/multer": "^2.1.0",
     "@types/node": "^25.5.0",
     "@types/nodemailer": "^7.0.11",
     "@types/react": "^19.0.0",

@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { verifyUserToken } from "./authToken";
-import { findById, listUsers } from "./userStore";
+import { findById, isUserActive, listUsers } from "./userStore";
 export function bearerAuth(req: Request, res: Response, next: NextFunction): void {
   const h = req.headers.authorization;
   const m = typeof h === "string" ? h.match(/^Bearer\s+(.+)$/i) : null;
@@ -16,6 +16,10 @@ export function bearerAuth(req: Request, res: Response, next: NextFunction): voi
   const u = findById(listUsers(), v.userId);
   if (!u) {
     res.status(401).json({ error: "Benutzer nicht gefunden." });
+    return;
+  }
+  if (!isUserActive(u)) {
+    res.status(401).json({ error: "Dieses Konto ist deaktiviert." });
     return;
   }
   req.authUser = u;

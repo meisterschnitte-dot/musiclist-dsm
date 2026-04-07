@@ -174,6 +174,37 @@ export async function moveUserEdlFile(
   await fs.rename(fromPath, toPath);
 }
 
+/** Verschiebt einen Unterordner (`fromParent` + `folderName`) nach `toParentSegments`. */
+export async function moveUserEdlDirectory(
+  userId: string,
+  fromParentSegments: string[],
+  folderName: string,
+  toParentSegments: string[]
+): Promise<void> {
+  assertSafeSegment(folderName);
+  const sourcePathSegments = [...fromParentSegments, folderName];
+  if (
+    fromParentSegments.length === toParentSegments.length &&
+    fromParentSegments.every((s, i) => s === toParentSegments[i])
+  ) {
+    return;
+  }
+  if (
+    toParentSegments.length >= sourcePathSegments.length &&
+    sourcePathSegments.every((s, i) => s === toParentSegments[i])
+  ) {
+    throw new Error("Ordner kann nicht in sich selbst oder einen Unterordner verschoben werden.");
+  }
+  if (await nameTakenInParent(userId, toParentSegments, folderName)) {
+    throw new Error("Ein Ordner oder eine Datei mit diesem Namen existiert bereits.");
+  }
+  const srcPath = resolveUnderEdlRoot(userId, sourcePathSegments);
+  const destDir = resolveUnderEdlRoot(userId, toParentSegments);
+  const destPath = path.join(destDir, folderName);
+  await fs.mkdir(destDir, { recursive: true });
+  await fs.rename(srcPath, destPath);
+}
+
 async function isFileAt(userId: string, segments: string[], name: string): Promise<boolean> {
   try {
     const fp = resolveUnderEdlRoot(userId, [...segments, name]);

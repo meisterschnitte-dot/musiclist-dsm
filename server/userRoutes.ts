@@ -6,10 +6,12 @@ import { signUserToken } from "./authToken";
 import { INITIAL_INVITE_PASSWORD } from "./constants";
 import { generateSalt, hashPassword, verifyPassword } from "./passwordHash";
 import {
+  countActiveAdmins,
   countAdmins,
   findByEmail,
   findById,
   findForLogin,
+  isUserActive,
   listUsers,
   makeUser,
   withUserMutation,
@@ -23,6 +25,7 @@ type BootstrapMutResult =
 type InviteMutResult = { ok: false; code: number; error: string } | { ok: true; user: PublicUser };
 type DeleteMutResult = { ok: false; code: number; error: string } | { ok: true };
 type PasswordMutResult = { ok: false; code: number; error: string } | { ok: true; user: PublicUser };
+type UpdateMutResult = { ok: false; code: number; error: string } | { ok: true; user: PublicUser };
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -58,6 +61,10 @@ export function createUserApiRouter(): Router {
     const u = findForLogin(users, login);
     if (!u || !verifyPassword(u, password)) {
       res.status(401).json({ error: "Unbekannte Anmeldung oder falsches Passwort." });
+      return;
+    }
+    if (!isUserActive(u)) {
+      res.status(403).json({ error: "Dieses Konto ist deaktiviert." });
       return;
     }
     res.json({ token: signUserToken(u.id), user: toPublicUser(u) });
@@ -185,6 +192,139 @@ export function createUserApiRouter(): Router {
     } catch (e) {
       console.error("[Musiclist users] invite", e);
       res.status(500).json({ error: "Benutzer konnte nicht angelegt werden." });
+    }
+  });
+
+  r.patch("/users/:id", bearerAuth, requireAdmin, async (req, res) => {
+    const id = String(req.params.id);
+    const firstName = typeof req.body?.firstName === "string" ? req.body.firstName.trim() : "";
+    const lastName = typeof req.body?.lastName === "string" ? req.body.lastName.trim() : "";
+    const emailRaw = typeof req.body?.email === "string" ? req.body.email : "";
+    const roleRaw = req.body?.role;
+    const role: UserRole =
+      roleRaw === "admin" ? "admin" : roleRaw === "customer" ? "customer" : "user";
+    const companyNameInBody = typeof req.body?.companyName === "string";
+    const companyNameRaw = companyNameInBody ? String(req.body.companyName).trim() : "";
+
+    if (!firstName || !lastName) {
+      res.status(400).json({ error: "Vor- und Nachname sind erforderlich." });
+      return;
+    }
+    if (!plausibleEmail(emailRaw)) {
+      res.status(400).json({ error: "Bitte eine gültige E-Mail-Adresse eingeben." });
+      return;
+    }
+    const email = normalizeEmail(emailRaw);
+
+    const snapshot = listUsers();
+    const target = findById(snapshot, id);
+    if (!target) {
+      res.status(404).json({ error: "Benutzer nicht gefunden." });
+      return;
+    }
+    if (email !== target.email && findByEmail(snapshot, email)) {
+      res.status(400).json({ error: "E-Mail bereits vergeben." });
+      return;
+    }
+    const activeInBody = typeof req.body?.active === "boolean";
+    const activeResolved = activeInBody ? Boolean(req.body.active) : isUserActive(target);
+    const selfId = req.authUser!.id;
+    if (!activeResolved && id === selfId) {
+      res.status(400).json({ error: "Das eigene Konto kann nicht deaktiviert werden." });
+      return;
+    }
+    if (
+      !activeResolved &&
+      target.role === "admin" &&
+      isUserActive(target) &&
+      countActiveAdmins(snapshot) <= 1
+    ) {
+      res.status(400).json({ error: "Der letzte aktive Administrator kann nicht deaktiviert werden." });
+      return;
+    }
+    if (target.role === "admin" && role !== "admin" && isUserActive(target) && countActiveAdmins(snapshot) <= 1) {
+      res.status(400).json({ error: "Der letzte aktive Administrator kann die Rolle nicht ändern." });
+      return;
+    }
+
+    let companyNameStored: string | undefined;
+    let customerIdResolved: string | undefined;
+
+    if (role === "customer") {
+      const companyMerge = (
+        companyNameInBody ? companyNameRaw : target.companyName?.trim() || ""
+      ).trim();
+      if (companyMerge) {
+        companyNameStored = companyMerge;
+        const sync = await syncCustomerForInvite({ companyName: companyMerge, email });
+        if ("error" in sync) {
+          res.status(400).json({ error: sync.error });
+          return;
+        }
+        customerIdResolved = sync.customerId;
+      } else {
+        companyNameStored = undefined;
+        customerIdResolved = undefined;
+      }
+    } else {
+      companyNameStored = undefined;
+      customerIdResolved = undefined;
+    }
+
+    try {
+      const out = await withUserMutation<UpdateMutResult>((users: StoredUser[]) => {
+        const ix = users.findIndex((u: StoredUser) => u.id === id);
+        if (ix < 0) {
+          return { next: users, result: { ok: false as const, code: 404, error: "Benutzer nicht gefunden." } };
+        }
+        const cur = users[ix]!;
+        if (email !== cur.email && findByEmail(users, email)) {
+          return { next: users, result: { ok: false as const, code: 400, error: "E-Mail bereits vergeben." } };
+        }
+        if (cur.role === "admin" && role !== "admin" && isUserActive(cur) && countActiveAdmins(users) <= 1) {
+          return {
+            next: users,
+            result: { ok: false as const, code: 400, error: "Der letzte aktive Administrator kann die Rolle nicht ändern." },
+          };
+        }
+        if (!activeResolved && id === selfId) {
+          return {
+            next: users,
+            result: { ok: false as const, code: 400, error: "Das eigene Konto kann nicht deaktiviert werden." },
+          };
+        }
+        if (
+          !activeResolved &&
+          cur.role === "admin" &&
+          isUserActive(cur) &&
+          countActiveAdmins(users) <= 1
+        ) {
+          return {
+            next: users,
+            result: { ok: false as const, code: 400, error: "Der letzte aktive Administrator kann nicht deaktiviert werden." },
+          };
+        }
+        const next = [...users];
+        next[ix] = {
+          ...cur,
+          firstName,
+          lastName,
+          email,
+          role,
+          companyName: companyNameStored,
+          customerId: customerIdResolved,
+          active: activeResolved,
+        };
+        return { next, result: { ok: true as const, user: toPublicUser(next[ix]) } };
+      });
+      if (!out.ok) {
+        res.status(out.code).json({ error: out.error });
+        return;
+      }
+      res.json({ user: out.user });
+    } catch (e) {
+      console.error("[Musiclist users] patch", e);
+      res.status(500).json({ error: "Benutzer konnte nicht gespeichert werden." });
     }
   });
 

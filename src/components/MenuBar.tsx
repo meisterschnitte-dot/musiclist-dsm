@@ -11,6 +11,12 @@ type MenuBarProps = {
   onLogout: () => void;
   onOpenUserManagement: () => void;
   onOpenStoragePaths: () => void;
+  /** Vollständige ZIP-Sicherung (data/ inkl. MP3s) — nur Admin. */
+  onDownloadFullBackup?: () => void;
+  backupDownloadBusy?: boolean;
+  /** ZIP einer früheren Sicherung einspielen (öffnet Dateiauswahl) — nur Admin. */
+  onRequestRestoreBackup?: () => void;
+  restoreBackupBusy?: boolean;
   onOpenCustomers: () => void;
   /** Kundenansicht (Playlist wie Export) ein/aus — nur sinnvoll für Admins. */
   customerViewActive?: boolean;
@@ -38,6 +44,10 @@ export function MenuBar({
   onLogout,
   onOpenUserManagement,
   onOpenStoragePaths,
+  onDownloadFullBackup,
+  backupDownloadBusy = false,
+  onRequestRestoreBackup,
+  restoreBackupBusy = false,
   onOpenCustomers,
   customerViewActive = false,
   onToggleCustomerView,
@@ -98,6 +108,36 @@ export function MenuBar({
                 >
                   Speicherpfade
                 </button>
+                {onDownloadFullBackup ? (
+                  <button
+                    type="button"
+                    className="menu-item"
+                    role="menuitem"
+                    disabled={backupDownloadBusy || restoreBackupBusy}
+                    title="ZIP mit allen Datenbank-Dateien und allen Fake-MP3s aus data/ herunterladen. Bei vielen Dateien kann das dauern."
+                    onClick={() => {
+                      setOpen(null);
+                      onDownloadFullBackup();
+                    }}
+                  >
+                    {backupDownloadBusy ? "Datensicherung …" : "Datensicherung herunterladen"}
+                  </button>
+                ) : null}
+                {onRequestRestoreBackup ? (
+                  <button
+                    type="button"
+                    className="menu-item"
+                    role="menuitem"
+                    disabled={restoreBackupBusy || backupDownloadBusy}
+                    title="ZIP einer Musiclist-Datensicherung auswählen. Ersetzt data/ auf dem Server; das aktuelle Verzeichnis wird vorher umbenannt."
+                    onClick={() => {
+                      setOpen(null);
+                      onRequestRestoreBackup();
+                    }}
+                  >
+                    {restoreBackupBusy ? "Wiederherstellen …" : "Datensicherung wiederherstellen …"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="menu-item"

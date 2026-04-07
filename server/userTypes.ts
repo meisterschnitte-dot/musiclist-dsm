@@ -15,6 +15,8 @@ export type StoredUser = {
   companyName?: string;
   /** Verweis auf Eintrag in `customers.json` — alle Logins dieses Kunden teilen dieselben Playlists. */
   customerId?: string;
+  /** Fehlt in älteren JSON-Dateien: gilt als aktiv. */
+  active?: boolean;
 };
 
 export type PublicUser = {
@@ -27,9 +29,11 @@ export type PublicUser = {
   legacyLoginName?: string;
   companyName?: string;
   customerId?: string;
+  active: boolean;
 };
 
 export function toPublicUser(u: StoredUser): PublicUser {
+  const active = u.active !== false;
   return {
     id: u.id,
     firstName: u.firstName,
@@ -40,5 +44,6 @@ export function toPublicUser(u: StoredUser): PublicUser {
     legacyLoginName: u.legacyLoginName,
     companyName: u.companyName,
     customerId: u.customerId,
+    active,
   };
 }

@@ -106,6 +106,19 @@ export async function apiEdlMoveFile(
   if (!res.ok) throw new Error(await parseError(res));
 }
 
+export async function apiEdlMoveDirectory(
+  fromParentSegments: string[],
+  folderName: string,
+  toParentSegments: string[]
+): Promise<void> {
+  const res = await fetch(`${API}/me/edl/move-directory`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ fromParentSegments, folderName, toParentSegments }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
 export async function apiEdlDeleteFile(segments: string[], fileName: string): Promise<void> {
   const res = await fetch(`${API}/me/edl/delete-file`, {
     method: "POST",

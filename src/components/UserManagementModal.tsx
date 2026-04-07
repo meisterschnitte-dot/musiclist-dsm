@@ -5,11 +5,14 @@ import {
   deleteUserRequest,
   fetchUsersList,
   inviteUserRequest,
+  updateUserRequest,
 } from "../api/usersApi";
 import type { AppUserRecord, UserRole } from "../storage/appUsersStorage";
 import {
+  countActiveAdmins,
   countAdmins,
   findUserByEmail,
+  isUserRecordActive,
   normalizeUserEmail,
 } from "../storage/appUsersStorage";
 
@@ -43,12 +46,34 @@ export function UserManagementModal({
   const [newCompany, setNewCompany] = useState("");
   const [customerNames, setCustomerNames] = useState<string[]>([]);
 
+  const [editingUser, setEditingUser] = useState<AppUserRecord | null>(null);
+  const [editFirst, setEditFirst] = useState("");
+  const [editLast, setEditLast] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editRole, setEditRole] = useState<UserRole>("user");
+  const [editCompany, setEditCompany] = useState("");
+  const [editActive, setEditActive] = useState(true);
+
   useEffect(() => {
     if (!open) return;
     void fetchCustomersList()
       .then((rows) => setCustomerNames(rows.map((c) => c.name).sort((a, b) => a.localeCompare(b, "de"))))
       .catch(() => setCustomerNames([]));
   }, [open]);
+
+  useEffect(() => {
+    if (!open) setEditingUser(null);
+  }, [open]);
+
+  useEffect(() => {
+    if (!editingUser) return;
+    setEditFirst(editingUser.firstName);
+    setEditLast(editingUser.lastName);
+    setEditEmail(editingUser.email);
+    setEditRole(editingUser.role);
+    setEditCompany(editingUser.companyName ?? "");
+    setEditActive(isUserRecordActive(editingUser));
+  }, [editingUser]);
 
   const companyDatalistId = useMemo(() => "user-mgmt-company-datalist", []);
 
@@ -153,6 +178,116 @@ export function UserManagementModal({
     [users, reloadList, currentUserId]
   );
 
+  const saveEditedUser = useCallback(async () => {
+    if (!editingUser) return;
+    setErr(null);
+    setInfo(null);
+    const fn = editFirst.trim();
+    const ln = editLast.trim();
+    const em = normalizeUserEmail(editEmail);
+    const company = editCompany.trim();
+    if (!fn || !ln) {
+      setErr("Vor- und Nachname sind erforderlich.");
+      return;
+    }
+    if (!isPlausibleEmail(editEmail)) {
+      setErr("Bitte eine gültige E-Mail-Adresse eingeben.");
+      return;
+    }
+    if (findUserByEmail(
+      users.filter((u) => u.id !== editingUser.id),
+      em
+    )) {
+      setErr("Diese E-Mail ist bereits vergeben.");
+      return;
+    }
+    if (!editActive && editingUser.id === currentUserId) {
+      setErr("Das eigene Konto kann nicht deaktiviert werden.");
+      return;
+    }
+    if (
+      !editActive &&
+      editingUser.role === "admin" &&
+      isUserRecordActive(editingUser) &&
+      countActiveAdmins(users) <= 1
+    ) {
+      setErr("Der letzte aktive Administrator kann nicht deaktiviert werden.");
+      return;
+    }
+    if (
+      editingUser.role === "admin" &&
+      editRole !== "admin" &&
+      isUserRecordActive(editingUser) &&
+      countActiveAdmins(users) <= 1
+    ) {
+      setErr("Der letzte aktive Administrator kann die Rolle nicht ändern.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateUserRequest(editingUser.id, {
+        firstName: fn,
+        lastName: ln,
+        email: em,
+        role: editRole,
+        active: editActive,
+        ...(editRole === "customer" ? { companyName: company } : {}),
+      });
+      await reloadList();
+      setEditingUser(null);
+      setInfo("Änderungen gespeichert.");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Speichern fehlgeschlagen.");
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    editingUser,
+    editFirst,
+    editLast,
+    editEmail,
+    editRole,
+    editCompany,
+    editActive,
+    users,
+    reloadList,
+    currentUserId,
+  ]);
+
+  const flipUserActive = useCallback(
+    async (u: AppUserRecord) => {
+      const nextActive = !isUserRecordActive(u);
+      setErr(null);
+      setInfo(null);
+      if (!nextActive && u.id === currentUserId) {
+        setErr("Das eigene Konto kann nicht deaktiviert werden.");
+        return;
+      }
+      if (!nextActive && u.role === "admin" && isUserRecordActive(u) && countActiveAdmins(users) <= 1) {
+        setErr("Der letzte aktive Administrator kann nicht deaktiviert werden.");
+        return;
+      }
+      setBusy(true);
+      try {
+        await updateUserRequest(u.id, {
+          firstName: u.firstName,
+          lastName: u.lastName,
+          email: u.email,
+          role: u.role,
+          active: nextActive,
+          ...(u.role === "customer" ? { companyName: u.companyName ?? "" } : {}),
+        });
+        await reloadList();
+        setInfo(nextActive ? "Benutzer wurde aktiviert." : "Benutzer wurde deaktiviert.");
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Speichern fehlgeschlagen.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [users, reloadList, currentUserId]
+  );
+
   if (!open) return null;
 
   return (
@@ -186,12 +321,16 @@ export function UserManagementModal({
                 <th>E-Mail</th>
                 <th>Firma</th>
                 <th>Rolle</th>
+                <th>Status</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id}>
+                <tr
+                  key={u.id}
+                  className={!isUserRecordActive(u) ? "user-mgmt-row-inactive" : undefined}
+                >
                   <td>{u.firstName}</td>
                   <td>{u.lastName}</td>
                   <td className="mono-cell user-mgmt-table-email">{u.email}</td>
@@ -204,23 +343,159 @@ export function UserManagementModal({
                         : "Benutzer"}
                   </td>
                   <td>
-                    <button
-                      type="button"
-                      className="btn-cell btn-cell--danger"
-                      disabled={u.id === currentUserId || busy}
-                      title={
-                        u.id === currentUserId ? "Eigenes Konto nicht hier löschbar" : undefined
-                      }
-                      onClick={() => void removeUser(u.id)}
-                    >
-                      Löschen
-                    </button>
+                    <label className="user-mgmt-active-toggle">
+                      <input
+                        type="checkbox"
+                        checked={isUserRecordActive(u)}
+                        disabled={
+                          busy ||
+                          (isUserRecordActive(u) &&
+                            (u.id === currentUserId ||
+                              (u.role === "admin" && countActiveAdmins(users) <= 1)))
+                        }
+                        title={
+                          u.id === currentUserId && isUserRecordActive(u)
+                            ? "Eigenes Konto bleibt aktiv"
+                            : u.role === "admin" &&
+                                isUserRecordActive(u) &&
+                                countActiveAdmins(users) <= 1
+                              ? "Letzter aktiver Administrator"
+                              : isUserRecordActive(u)
+                                ? "Deaktivieren"
+                                : "Aktivieren"
+                        }
+                        onChange={() => void flipUserActive(u)}
+                      />
+                      <span>{isUserRecordActive(u) ? "Aktiv" : "Inaktiv"}</span>
+                    </label>
+                  </td>
+                  <td>
+                    <div className="user-mgmt-row-actions">
+                      <button
+                        type="button"
+                        className="btn-cell btn-cell--soft btn-cell--compact"
+                        disabled={busy}
+                        onClick={() => {
+                          setErr(null);
+                          setInfo(null);
+                          setEditingUser(u);
+                        }}
+                      >
+                        Bearbeiten
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-cell btn-cell--danger btn-cell--compact"
+                        disabled={u.id === currentUserId || busy}
+                        title={
+                          u.id === currentUserId ? "Eigenes Konto nicht hier löschbar" : undefined
+                        }
+                        onClick={() => void removeUser(u.id)}
+                      >
+                        Löschen
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+
+        {editingUser && (
+          <>
+            <h3 className="user-mgmt-subtitle">Benutzer bearbeiten</h3>
+            <p className="modal-lead" style={{ fontSize: "0.85rem", marginTop: 0 }}>
+              {editingUser.email}
+            </p>
+            <div className="user-mgmt-add-form">
+              <label className="tag-field">
+                <span>Vorname</span>
+                <input
+                  type="text"
+                  value={editFirst}
+                  onChange={(e) => setEditFirst(e.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="tag-field">
+                <span>Nachname</span>
+                <input
+                  type="text"
+                  value={editLast}
+                  onChange={(e) => setEditLast(e.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="tag-field">
+                <span>E-Mail</span>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="tag-field">
+                <span>Rolle</span>
+                <select
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as UserRole)}
+                  className="user-mgmt-select"
+                >
+                  <option value="user">Benutzer</option>
+                  <option value="customer">Kunde</option>
+                  <option value="admin">Administrator</option>
+                </select>
+              </label>
+              {editRole === "customer" && (
+                <label className="tag-field">
+                  <span>Firmenname (optional)</span>
+                  <input
+                    type="text"
+                    value={editCompany}
+                    onChange={(e) => setEditCompany(e.target.value)}
+                    list={companyDatalistId}
+                    autoComplete="off"
+                    placeholder="Aus Kundenverwaltung oder neu …"
+                  />
+                </label>
+              )}
+              <label className="tag-field user-mgmt-active-field">
+                <span>Konto aktiv</span>
+                <input
+                  type="checkbox"
+                  checked={editActive}
+                  disabled={editingUser.id === currentUserId}
+                  title={
+                    editingUser.id === currentUserId
+                      ? "Das eigene Konto kann hier nicht deaktiviert werden."
+                      : undefined
+                  }
+                  onChange={(e) => setEditActive(e.target.checked)}
+                />
+              </label>
+              <div className="user-mgmt-edit-actions">
+                <button
+                  type="button"
+                  className="btn-modal primary"
+                  disabled={busy}
+                  onClick={() => void saveEditedUser()}
+                >
+                  Speichern
+                </button>
+                <button
+                  type="button"
+                  className="btn-modal"
+                  disabled={busy}
+                  onClick={() => setEditingUser(null)}
+                >
+                  Abbrechen
+                </button>
+              </div>
+            </div>
+          </>
+        )}
 
         <h3 className="user-mgmt-subtitle">Benutzer einladen</h3>
         <div className="user-mgmt-add-form">

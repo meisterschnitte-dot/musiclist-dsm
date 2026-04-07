@@ -24,6 +24,7 @@ export function createCustomerServerEdlLibraryAccess(): EdlLibraryAccess {
     writeBinary: ro,
     mkdir: ro,
     moveFile: ro,
+    moveDirectory: ro,
     deleteDirectory: ro,
     renameDirectory: ro,
   };

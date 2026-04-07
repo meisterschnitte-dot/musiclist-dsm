@@ -301,6 +301,7 @@ export function SystemSettingsModal({
                 <thead>
                   <tr>
                     <th className="table-th-resizable table-th-with-filter" scope="col">
+                      <div className="table-th-filter-stack">
                       <div className="table-th-head-row">
                         <span className="table-th-text">Labelcode</span>
                       </div>
@@ -315,6 +316,7 @@ export function SystemSettingsModal({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
+                      </div>
                       <span
                         className="table-col-resize-handle"
                         onMouseDown={attachGvlResize(0)}
@@ -324,6 +326,7 @@ export function SystemSettingsModal({
                       />
                     </th>
                     <th className="table-th-resizable table-th-with-filter" scope="col">
+                      <div className="table-th-filter-stack">
                       <div className="table-th-head-row">
                         <span className="table-th-text">Label</span>
                       </div>
@@ -338,6 +341,7 @@ export function SystemSettingsModal({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
+                      </div>
                       <span
                         className="table-col-resize-handle"
                         onMouseDown={attachGvlResize(1)}
@@ -347,6 +351,7 @@ export function SystemSettingsModal({
                       />
                     </th>
                     <th className="table-th-resizable table-th-with-filter" scope="col">
+                      <div className="table-th-filter-stack">
                       <div className="table-th-head-row">
                         <span className="table-th-text">Kürzel</span>
                       </div>
@@ -361,6 +366,7 @@ export function SystemSettingsModal({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
+                      </div>
                       <span
                         className="table-col-resize-handle"
                         onMouseDown={attachGvlResize(2)}
@@ -370,6 +376,7 @@ export function SystemSettingsModal({
                       />
                     </th>
                     <th className="table-th-resizable table-th-with-filter" scope="col">
+                      <div className="table-th-filter-stack">
                       <div className="table-th-head-row">
                         <span className="table-th-text">PLM</span>
                       </div>
@@ -384,6 +391,7 @@ export function SystemSettingsModal({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
+                      </div>
                       <span
                         className="table-col-resize-handle"
                         onMouseDown={attachGvlResize(3)}
@@ -393,6 +401,7 @@ export function SystemSettingsModal({
                       />
                     </th>
                     <th className="table-th-resizable table-th-with-filter" scope="col">
+                      <div className="table-th-filter-stack">
                       <div className="table-th-head-row">
                         <span className="table-th-text">Hersteller</span>
                       </div>
@@ -407,6 +416,7 @@ export function SystemSettingsModal({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
+                      </div>
                       <span
                         className="table-col-resize-handle"
                         onMouseDown={attachGvlResize(4)}
@@ -416,6 +426,7 @@ export function SystemSettingsModal({
                       />
                     </th>
                     <th className="table-th-resizable table-th-with-filter" scope="col">
+                      <div className="table-th-filter-stack">
                       <div className="table-th-head-row">
                         <span className="table-th-text">Rechterückrufe</span>
                       </div>
@@ -430,6 +441,7 @@ export function SystemSettingsModal({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
+                      </div>
                       <span
                         className="table-col-resize-handle"
                         onMouseDown={attachGvlResize(5)}

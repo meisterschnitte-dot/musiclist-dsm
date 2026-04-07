@@ -73,7 +73,8 @@ export function mergeAudioTags(base: AudioTags, overlay?: AudioTags): AudioTags 
   return out;
 }
 
-const AUDIO_TAG_KEYS: (keyof AudioTags)[] = [
+/** Alle String-Tags + wird für Multi-Edit und overlayFromForm verwendet. */
+export const AUDIO_TAG_KEYS: (keyof AudioTags)[] = [
   "songTitle",
   "artist",
   "album",
@@ -134,6 +135,27 @@ export function tagEntriesForDisplay(tags: AudioTags): { label: string; value: s
     if (t) out.push({ label: AUDIO_TAG_FIELD_LABELS[k], value: t });
   }
   return out;
+}
+
+/**
+ * Mehrfachbearbeitung: nur `touchedKeys` aus `formTags` auf `merged` anwenden
+ * (vorherige Werte pro Titel bleiben für nicht angefasste Felder erhalten).
+ */
+export function applyMultiEditTagPatch(
+  merged: AudioTags,
+  formTags: AudioTags,
+  touchedKeys: ReadonlySet<string>
+): AudioTags {
+  const overlay: AudioTags = {};
+  for (const k of AUDIO_TAG_KEYS) {
+    if (!touchedKeys.has(k)) continue;
+    const v = formTags[k];
+    if (typeof v === "string") (overlay as Record<string, string>)[k] = v;
+  }
+  if (touchedKeys.has("warnung")) {
+    overlay.warnung = formTags.warnung;
+  }
+  return mergeWarnungForDisplay(mergeAudioTags(merged, overlay));
 }
 
 /** Differenz Formular ↔ automatische Vorgabe — nur Abweichungen speichern. */

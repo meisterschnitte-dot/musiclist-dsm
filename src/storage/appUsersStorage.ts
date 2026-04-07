@@ -11,6 +11,8 @@ export type AppUserRecord = {
   legacyLoginName?: string;
   companyName?: string;
   customerId?: string;
+  /** Fehlt: gilt als aktiv. */
+  active?: boolean;
 };
 
 export function normalizeEmail(email: string): string {
@@ -46,4 +48,12 @@ export function findUserForLogin(users: AppUserRecord[], login: string): AppUser
 
 export function countAdmins(users: AppUserRecord[]): number {
   return users.filter((u) => u.role === "admin").length;
+}
+
+export function isUserRecordActive(u: AppUserRecord): boolean {
+  return u.active !== false;
+}
+
+export function countActiveAdmins(users: AppUserRecord[]): number {
+  return users.filter((u) => u.role === "admin" && isUserRecordActive(u)).length;
 }

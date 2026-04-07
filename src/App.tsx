@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  applyMultiEditTagPatch,
   AUDIO_TAG_FIELD_LABELS,
   AUDIO_TAG_TABLE_COLUMN_KEYS,
   defaultTagsFromPlaylistTitle,
@@ -84,6 +85,7 @@ import {
   type GvlSyncUpdateItem,
 } from "./gvlPlaylistSync";
 import { setUsersApiToken } from "./api/authToken";
+import { copyTextToClipboard } from "./utils/copyToClipboard";
 import {
   apiSharedGvlLabelDbFetch,
   apiSharedGvlLabelDbSave,
@@ -96,6 +98,9 @@ import {
   apiSharedTracksReadBinary,
   apiSharedTracksWriteBinary,
 } from "./api/sharedTracksApi";
+import { downloadFullDataBackup } from "./api/adminBackupApi";
+import { uploadRestoreBackup } from "./api/adminRestoreApi";
+import { apiStoragePathsFetch } from "./api/storagePathsApi";
 import { fetchUsersList } from "./api/usersApi";
 import type { AppUserRecord } from "./storage/appUsersStorage";
 import { displayName } from "./storage/appUsersStorage";
@@ -416,7 +421,9 @@ type DupModalState = DuplicatePrompt & {
 
 type TagModalState =
   | { kind: "playlist"; index: number }
-  | { kind: "file"; fileName: string };
+  | { kind: "playlistMulti"; indices: number[] }
+  | { kind: "file"; fileName: string }
+  | { kind: "fileMulti"; fileNames: string[] };
 
 function isMp3FileName(name: string): boolean {
   return basenamePath(name).toLowerCase().endsWith(".mp3");
@@ -507,6 +514,7 @@ function ColumnFilterTh({
       }
       onDrop={columnDrag?.onDrop}
     >
+      <div className="table-th-filter-stack">
       <div className="table-th-head-row">
         {columnDrag && (
           <span
@@ -593,6 +601,7 @@ function ColumnFilterTh({
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       />
+      </div>
       <span
         className="table-col-resize-handle"
         onMouseDown={attachResize(colIndex)}
@@ -606,6 +615,7 @@ function ColumnFilterTh({
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const restoreBackupInputRef = useRef<HTMLInputElement>(null);
   const xlsInputRef = useRef<HTMLInputElement>(null);
   const [playlist, setPlaylist] = useState<PlaylistEntry[] | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -701,6 +711,8 @@ export default function App() {
   const [mp3DbTableVisible, setMp3DbTableVisible] = useState(true);
   const [mp3DbPlayerVisible, setMp3DbPlayerVisible] = useState(true);
   const [storagePathsOpen, setStoragePathsOpen] = useState(false);
+  const [backupDownloadBusy, setBackupDownloadBusy] = useState(false);
+  const [restoreBackupBusy, setRestoreBackupBusy] = useState(false);
   const [edlLibraryRefresh, setEdlLibraryRefresh] = useState(0);
   /** `null` = Import/EDL-Speichern in die EDL-Wurzel; sonst Unterordner-Pfad. */
   const [edlImportTargetSegments, setEdlImportTargetSegments] = useState<string[] | null>(null);
@@ -1383,27 +1395,42 @@ export default function App() {
     [runGemaXlsImport, importOverlay]
   );
 
+  const remapEdlPathsAfterFolderRelocate = useCallback((oldPath: string[], newPath: string[]) => {
+    setEdlImportTargetSegments((prev) => {
+      if (prev === null) return null;
+      return replaceFolderPathPrefix(prev, oldPath, newPath);
+    });
+    setLoadedLibraryFile((lf) => {
+      if (!lf) return null;
+      const next = replaceFolderPathPrefix(lf.parentSegments, oldPath, newPath);
+      if (
+        next.length === lf.parentSegments.length &&
+        next.every((s, i) => s === lf.parentSegments[i])
+      ) {
+        return lf;
+      }
+      return { ...lf, parentSegments: next };
+    });
+  }, []);
+
   const onEdlFolderRenamed = useCallback(
     (parentSegments: string[], oldFolderName: string, newFolderName: string) => {
-      const oldPath = [...parentSegments, oldFolderName];
-      const newPath = [...parentSegments, newFolderName];
-      setEdlImportTargetSegments((prev) => {
-        if (prev === null) return null;
-        return replaceFolderPathPrefix(prev, oldPath, newPath);
-      });
-      setLoadedLibraryFile((lf) => {
-        if (!lf) return null;
-        const next = replaceFolderPathPrefix(lf.parentSegments, oldPath, newPath);
-        if (
-          next.length === lf.parentSegments.length &&
-          next.every((s, i) => s === lf.parentSegments[i])
-        ) {
-          return lf;
-        }
-        return { ...lf, parentSegments: next };
-      });
+      remapEdlPathsAfterFolderRelocate(
+        [...parentSegments, oldFolderName],
+        [...parentSegments, newFolderName]
+      );
     },
-    []
+    [remapEdlPathsAfterFolderRelocate]
+  );
+
+  const onEdlFolderMoved = useCallback(
+    (fromParentSegments: string[], folderName: string, toParentSegments: string[]) => {
+      remapEdlPathsAfterFolderRelocate(
+        [...fromParentSegments, folderName],
+        [...toParentSegments, folderName]
+      );
+    },
+    [remapEdlPathsAfterFolderRelocate]
   );
 
   const askDuplicate = useCallback((info: DuplicatePrompt) => {
@@ -1519,6 +1546,12 @@ export default function App() {
     openPlaylistTags,
   ]);
 
+  const openPlaylistTagsMulti = useCallback((indices: number[]) => {
+    if (indices.length < 2) return;
+    setTagEditInitial({});
+    setTagModal({ kind: "playlistMulti", indices: [...indices].sort((a, b) => a - b) });
+  }, []);
+
   const openFileTags = useCallback(
     (fileName: string) => {
       setTagModalLoadBusy(true);
@@ -1552,19 +1585,191 @@ export default function App() {
     [playlist, tagStore, sessionUserId]
   );
 
+  const openFileTagsMulti = useCallback((fileNames: string[]) => {
+    const uniq = [...new Set(fileNames)];
+    if (uniq.length < 2) return;
+    setTagEditInitial({});
+    setTagModal({ kind: "fileMulti", fileNames: uniq });
+  }, []);
+
+  /** Mehrfachauswahl: M öffnet Multi-Tag-Bearbeitung (Playlist oder Musikdatenbank). */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== "m" && e.key !== "M") return;
+      const ae = document.activeElement;
+      if (
+        ae instanceof HTMLInputElement ||
+        ae instanceof HTMLTextAreaElement ||
+        ae instanceof HTMLSelectElement ||
+        (ae instanceof HTMLElement && ae.isContentEditable)
+      )
+        return;
+      if (tagModal || tagModalLoadBusy) return;
+      if (playlistAsCustomerExport) return;
+      if (edlSelectedRowIndices.size >= 2) {
+        e.preventDefault();
+        openPlaylistTagsMulti([...edlSelectedRowIndices]);
+        return;
+      }
+      if (mp3SelectedNames.size >= 2) {
+        e.preventDefault();
+        openFileTagsMulti([...mp3SelectedNames]);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [
+    tagModal,
+    tagModalLoadBusy,
+    playlistAsCustomerExport,
+    edlSelectedRowIndices,
+    mp3SelectedNames,
+    openPlaylistTagsMulti,
+    openFileTagsMulti,
+  ]);
+
   const closeTagModal = useCallback(() => {
     setTagModal(null);
     setGvlApplyToTag(null);
   }, []);
 
   const saveTagModal = useCallback(
-    async (form: AudioTags) => {
+    async (form: AudioTags, meta?: { multi: true; touchedKeys: readonly string[] }) => {
       setError(null);
       if (!tagModal) {
         setTagModal(null);
         setGvlApplyToTag(null);
         return;
       }
+
+      if (meta?.multi) {
+        const touched = new Set(meta.touchedKeys);
+        const st = tagStoreRef.current;
+        try {
+          if (tagModal.kind === "playlistMulti") {
+            if (!playlist?.length) {
+              setTagModal(null);
+              setGvlApplyToTag(null);
+              return;
+            }
+            type PlUp = { key: string; overlay: AudioTags; row: (typeof playlist)[number] };
+            const pending: PlUp[] = [];
+            for (const idx of tagModal.indices) {
+              const row = playlist[idx];
+              if (!row) continue;
+              const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+              let id3: AudioTags = {};
+              const linked = row.linkedTrackFileName;
+              if (sessionUserId && linked && isMp3FileName(linked)) {
+                try {
+                  const buf = await apiSharedTracksReadBinary(linked);
+                  const file = new File([buf], basenamePath(linked), { type: "audio/mpeg" });
+                  id3 = await readAudioTagsFromBlob(file);
+                } catch {
+                  /* Datei fehlt */
+                }
+              }
+              const merged = mergeWarnungForDisplay(
+                mergeAudioTags(mergeAudioTags(base, playlistRowTagOverlay(row, st)), id3)
+              );
+              const after = applyMultiEditTagPatch(merged, form, touched);
+              const overlay = overlayFromForm(base, after);
+              if (sessionUserId && linked && isMp3FileName(linked)) {
+                await writeAudioTagsToSharedMp3(
+                  apiSharedTracksReadBinary,
+                  apiSharedTracksWriteBinary,
+                  linked,
+                  after
+                );
+                try {
+                  const entry = await apiSharedMusicDbTouchTagEdited(linked);
+                  setMusicDbMetadata((prev) => ({ ...prev, [linked]: entry }));
+                } catch {
+                  /* optional */
+                }
+              }
+              pending.push({ key: playlistEntryTagStoreKey(row), overlay, row });
+            }
+            setTagStore((prev) => {
+              const next = { ...prev };
+              for (const p of pending) {
+                if (Object.keys(p.overlay).length === 0) delete next[p.key];
+                else next[p.key] = p.overlay;
+                if (p.row.linkedTrackFileName?.trim()) {
+                  delete next[playlistTagKey(p.row.id)];
+                }
+              }
+              persistTagStore(next);
+              return next;
+            });
+          } else if (tagModal.kind === "fileMulti") {
+            type FUp = { key: string; overlay: AudioTags; fileName: string };
+            const pending: FUp[] = [];
+            for (const fileName of tagModal.fileNames) {
+              const base = defaultTagsFromPlaylistTitle(fileName);
+              const row = playlist?.find((r) => r.linkedTrackFileName === fileName);
+              const overlayPrev = row
+                ? playlistRowTagOverlay(row, st)
+                : st[fileTagKey(fileName)] ?? {};
+              let id3: AudioTags = {};
+              if (sessionUserId && isMp3FileName(fileName)) {
+                try {
+                  const buf = await apiSharedTracksReadBinary(fileName);
+                  const file = new File([buf], basenamePath(fileName), { type: "audio/mpeg" });
+                  id3 = await readAudioTagsFromBlob(file);
+                } catch {
+                  /* */
+                }
+              }
+              const merged = mergeWarnungForDisplay(
+                mergeAudioTags(mergeAudioTags(base, overlayPrev), id3)
+              );
+              const after = applyMultiEditTagPatch(merged, form, touched);
+              const overlay = overlayFromForm(base, after);
+              if (sessionUserId && isMp3FileName(fileName)) {
+                await writeAudioTagsToSharedMp3(
+                  apiSharedTracksReadBinary,
+                  apiSharedTracksWriteBinary,
+                  fileName,
+                  after
+                );
+                try {
+                  const entry = await apiSharedMusicDbTouchTagEdited(fileName);
+                  setMusicDbMetadata((prev) => ({ ...prev, [fileName]: entry }));
+                } catch {
+                  /* */
+                }
+              }
+              pending.push({ key: fileTagKey(fileName), overlay, fileName });
+            }
+            setTagStore((prev) => {
+              const next = { ...prev };
+              for (const p of pending) {
+                if (Object.keys(p.overlay).length === 0) delete next[p.key];
+                else next[p.key] = p.overlay;
+                if (playlist) {
+                  for (const r of playlist) {
+                    if (r.linkedTrackFileName === p.fileName) {
+                      delete next[playlistTagKey(r.id)];
+                    }
+                  }
+                }
+              }
+              persistTagStore(next);
+              return next;
+            });
+          }
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Tags konnten nicht gespeichert werden.");
+          return;
+        }
+        setTagModal(null);
+        setGvlApplyToTag(null);
+        return;
+      }
+
       if (tagModal.kind === "playlist") {
         if (!playlist) {
           setTagModal(null);
@@ -2337,13 +2542,43 @@ export default function App() {
     window.setTimeout(() => setHighlightMp3Name(null), 2200);
   }, []);
 
-  const revealFileInExplorer = useCallback(async (fileName: string) => {
+  /** Gecachtes tracksDir vom API-Server (Pfad kopieren im Kontextmenü). */
+  const serverTracksDirRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionUserId) serverTracksDirRef.current = null;
+  }, [sessionUserId]);
+
+  const copyMp3ServerPathToClipboard = useCallback(async (relativeFilePath: string) => {
     setTagsCtxMenu(null);
     setError(null);
-    setInfoMessage(
-      `Die Fake-MP3 „${fileName}“ liegt auf dem Server (gemeinsame Installation). Ein Öffnen im lokalen Explorer ist dafür nicht vorgesehen — Zugriff über die App (Tags, Transfer).`
-    );
-  }, []);
+    const rel = relativeFilePath.replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!rel) {
+      setInfoMessage("Kein Dateipfad vorhanden.");
+      return;
+    }
+    if (!sessionUserId) {
+      const ok = await copyTextToClipboard(rel);
+      setInfoMessage(
+        ok
+          ? `Relativer Pfad kopiert: „${rel}“. Nach der Anmeldung kopiert die App den vollständigen Server-Pfad.`
+          : "Kopieren in die Zwischenablage fehlgeschlagen."
+      );
+      return;
+    }
+    try {
+      let root = serverTracksDirRef.current;
+      if (!root) {
+        const p = await apiStoragePathsFetch();
+        root = p.tracksDir;
+        serverTracksDirRef.current = root;
+      }
+      const full = `${root.replace(/[/\\]+$/, "")}/${rel}`;
+      const ok = await copyTextToClipboard(full);
+      setInfoMessage(ok ? "Pfad in die Zwischenablage kopiert." : "Kopieren fehlgeschlagen.");
+    } catch (e) {
+      setInfoMessage(e instanceof Error ? e.message : "Server-Pfad konnte nicht geladen werden.");
+    }
+  }, [sessionUserId]);
 
   const purgeMusicDbEntriesFromState = useCallback(
     async (
@@ -3164,6 +3399,57 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [infoMessage]);
 
+  const onDownloadFullBackup = useCallback(() => {
+    void (async () => {
+      setBackupDownloadBusy(true);
+      setError(null);
+      try {
+        await downloadFullDataBackup();
+        setInfoMessage("Datensicherung wurde heruntergeladen.");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Sicherung fehlgeschlagen.");
+      } finally {
+        setBackupDownloadBusy(false);
+      }
+    })();
+  }, []);
+
+  const onRequestRestoreBackup = useCallback(() => {
+    restoreBackupInputRef.current?.click();
+  }, []);
+
+  const onRestoreBackupFileChange = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!f.name.toLowerCase().endsWith(".zip")) {
+      setError("Bitte eine ZIP-Datei wählen.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Die aktuelle Datenbank auf dem Server wird durch diese ZIP-Sicherung ersetzt.\n\n" +
+          "Das bisherige data-Verzeichnis wird vorher umbenannt (data.pre-restore-…).\n\n" +
+          "Fortfahren?"
+      )
+    ) {
+      return;
+    }
+    setRestoreBackupBusy(true);
+    setError(null);
+    try {
+      await uploadRestoreBackup(f);
+      setInfoMessage("Wiederherstellung abgeschlossen. Die Seite lädt neu …");
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 600);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Wiederherstellung fehlgeschlagen.");
+    } finally {
+      setRestoreBackupBusy(false);
+    }
+  }, []);
+
   const onSplitResizeMouseDown = useCallback((e: ReactMouseEvent) => {
     e.preventDefault();
     splitDragRef.current = { y: e.clientY, frac: splitTopFrac };
@@ -3333,6 +3619,14 @@ export default function App() {
         aria-hidden
         onChange={onXlsInputChange}
       />
+      <input
+        ref={restoreBackupInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="file-input-hidden"
+        aria-hidden
+        onChange={onRestoreBackupFileChange}
+      />
 
       <div className="app-shell" inert={currentUser.mustChangePassword}>
         <MenuBar
@@ -3342,6 +3636,10 @@ export default function App() {
           onLogout={onLogout}
           onOpenUserManagement={() => setUserManagementOpen(true)}
           onOpenStoragePaths={() => setStoragePathsOpen(true)}
+          onDownloadFullBackup={isAdmin ? onDownloadFullBackup : undefined}
+          backupDownloadBusy={backupDownloadBusy}
+          onRequestRestoreBackup={isAdmin ? onRequestRestoreBackup : undefined}
+          restoreBackupBusy={restoreBackupBusy}
           onOpenCustomers={() => setCustomersModalOpen(true)}
           customerViewActive={customerModeActive}
           onToggleCustomerView={() => setCustomerModeActive((v) => !v)}
@@ -3398,50 +3696,49 @@ export default function App() {
               >
                 <div className="panel-head">
                   <div className="panel-head-title-row panel-head-title-row--mp3">
-                    <div className="panel-mp3-title-cluster">
-                      <h2 className="panel-title">
-                        {playlistAsCustomerExport ? "Kundenansicht" : "EDL- & Playlist"}
-                      </h2>
-                      {!playlistAsCustomerExport && edlHiddenColumnIdsSorted.length > 0 && (
-                        <div
-                          className="panel-mp3-hidden-cols"
-                          role="group"
-                          aria-label="Ausgeblendete Spalten wieder anzeigen"
-                        >
-                          {edlHiddenColumnIdsSorted.map((hid) => (
-                            <button
-                              key={hid}
-                              type="button"
-                              className="btn-mp3-col-restore"
-                              onClick={() => showEdlColumn(hid)}
-                            >
-                              {getEdlColumnLabel(hid)}
-                            </button>
-                          ))}
+                    <div className="panel-edl-playlist-title-stack">
+                      <div className="panel-mp3-title-cluster">
+                        <h2 className="panel-title">
+                          {playlistAsCustomerExport ? "Kundenansicht" : "EDL- & Playlist"}
+                        </h2>
+                        {!playlistAsCustomerExport && edlHiddenColumnIdsSorted.length > 0 && (
+                          <div
+                            className="panel-mp3-hidden-cols"
+                            role="group"
+                            aria-label="Ausgeblendete Spalten wieder anzeigen"
+                          >
+                            {edlHiddenColumnIdsSorted.map((hid) => (
+                              <button
+                                key={hid}
+                                type="button"
+                                className="btn-mp3-col-restore"
+                                onClick={() => showEdlColumn(hid)}
+                              >
+                                {getEdlColumnLabel(hid)}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {playlist && fileName && (
+                        <div className="panel-title-meta" aria-label="EDL-Informationen">
+                          <span>{fileName}</span>
+                          {fileName.toLowerCase().endsWith(".xls") ? (
+                            <span className="panel-title-meta-kind"> · XLS</span>
+                          ) : null}
+                          <span>
+                            {" · "}
+                            {playlist.length} Einträge (Netto: {netPlaylistTracks})
+                          </span>
+                          {edlFiltersActiveForPlaylistView && (
+                            <span>
+                              {" · "}
+                              {filteredPlaylistRowIndices.length} angezeigt
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
-                    {playlist && fileName && (
-                      <div
-                        className="panel-title-meta panel-title-meta--beside-title"
-                        aria-label="EDL-Informationen"
-                      >
-                        <span>{fileName}</span>
-                        {fileName.toLowerCase().endsWith(".xls") ? (
-                          <span className="panel-title-meta-kind"> · XLS</span>
-                        ) : null}
-                        <span>
-                          {" · "}
-                          {playlist.length} Einträge (Netto: {netPlaylistTracks})
-                        </span>
-                        {edlFiltersActiveForPlaylistView && (
-                          <span>
-                            {" · "}
-                            {filteredPlaylistRowIndices.length} angezeigt
-                          </span>
-                        )}
-                      </div>
-                    )}
                     {!playlistAsCustomerExport ? (
                       <div className="panel-head-edl-actions">
                         <button
@@ -3786,6 +4083,7 @@ export default function App() {
                       importGemaXlsTitle={IMPORT_XLS_TOOLTIP}
                       importGemaXlsDisabled={!!importOverlay}
                       onEdlFolderRenamed={onEdlFolderRenamed}
+                      onEdlFolderMoved={onEdlFolderMoved}
                       readOnly={isCustomerUser}
                       activeLibraryFile={
                         loadedLibraryFile
@@ -4217,11 +4515,28 @@ export default function App() {
               onClick={() => {
                 const m = tagsCtxMenu;
                 setTagsCtxMenu(null);
-                if (m?.kind === "playlist") openPlaylistTags(m.index);
-                else if (m?.kind === "file") openFileTags(m.fileName);
+                if (m?.kind === "playlist") {
+                  if (m.removeFromListIndices.length > 1) {
+                    openPlaylistTagsMulti(m.removeFromListIndices);
+                  } else {
+                    openPlaylistTags(m.index);
+                  }
+                } else if (m?.kind === "file") {
+                  if (m.deleteTargets.length > 1) {
+                    openFileTagsMulti(m.deleteTargets);
+                  } else {
+                    openFileTags(m.fileName);
+                  }
+                }
               }}
             >
-              Tags bearbeiten
+              {tagsCtxMenu.kind === "playlist"
+                ? tagsCtxMenu.removeFromListIndices.length > 1
+                  ? `Tags bearbeiten (${tagsCtxMenu.removeFromListIndices.length}) …`
+                  : "Tags bearbeiten"
+                : tagsCtxMenu.deleteTargets.length > 1
+                  ? `Tags bearbeiten (${tagsCtxMenu.deleteTargets.length}) …`
+                  : "Tags bearbeiten"}
             </button>
             {tagsCtxMenu.kind === "playlist" &&
               playlist?.[tagsCtxMenu.index]?.linkedTrackFileName && (
@@ -4242,12 +4557,13 @@ export default function App() {
                     type="button"
                     className="tags-ctx-menu-item"
                     role="menuitem"
+                    title="Kopiert den vollständigen Server-Pfad der MP3 in die Zwischenablage (bei Anmeldung)."
                     onClick={() => {
                       const fn = playlist[tagsCtxMenu.index].linkedTrackFileName!;
-                      void revealFileInExplorer(fn);
+                      void copyMp3ServerPathToClipboard(fn);
                     }}
                   >
-                    Zeige Datei im Explorer
+                    Pfad kopieren
                   </button>
                 </>
               )}
@@ -4287,12 +4603,13 @@ export default function App() {
                   type="button"
                   className="tags-ctx-menu-item"
                   role="menuitem"
+                  title="Kopiert den vollständigen Server-Pfad der MP3 in die Zwischenablage (bei Anmeldung)."
                   onClick={() => {
                     const fileName = tagsCtxMenu.fileName;
-                    void revealFileInExplorer(fileName);
+                    void copyMp3ServerPathToClipboard(fileName);
                   }}
                 >
-                  Zeige Datei im Explorer
+                  Pfad kopieren
                 </button>
                 {sessionUserId && isAdmin && (
                   <button
@@ -4332,21 +4649,34 @@ export default function App() {
       {tagModal && !tagModalLoadBusy && (
         <TagEditorModal
           open
+          multiTrack={
+            tagModal.kind === "playlistMulti" || tagModal.kind === "fileMulti"
+          }
           heading={
-            tagModal.kind === "playlist"
-              ? `Tags — Zeile ${tagModal.index + 1}`
-              : `Tags — ${tagModal.fileName}`
+            tagModal.kind === "playlistMulti"
+              ? `Tags — ${tagModal.indices.length} Einträge gleichzeitig`
+              : tagModal.kind === "fileMulti"
+                ? `Tags — ${tagModal.fileNames.length} Dateien gleichzeitig`
+                : tagModal.kind === "playlist"
+                  ? `Tags — Zeile ${tagModal.index + 1}`
+                  : `Tags — ${tagModal.fileName}`
           }
           initial={tagEditInitial}
           gvlLabelDb={gvlLabelDb}
           p7SearchSource={
-            tagModal.kind === "playlist" && playlist
-              ? playlist[tagModal.index]?.linkedTrackFileName ?? playlist[tagModal.index]?.title ?? null
-              : tagModal.kind === "file"
-                ? tagModal.fileName
-                : null
+            tagModal.kind === "playlistMulti" || tagModal.kind === "fileMulti"
+              ? null
+              : tagModal.kind === "playlist" && playlist
+                ? playlist[tagModal.index]?.linkedTrackFileName ??
+                  playlist[tagModal.index]?.title ??
+                  null
+                : tagModal.kind === "file"
+                  ? tagModal.fileName
+                  : null
           }
-          gvlApplyFromDb={gvlApplyToTag}
+          gvlApplyFromDb={
+            tagModal.kind === "playlistMulti" || tagModal.kind === "fileMulti" ? null : gvlApplyToTag
+          }
           showGvlDatabaseButton={isAdmin}
           onOpenGvlDatabase={onOpenSystemSettings}
           onClose={closeTagModal}

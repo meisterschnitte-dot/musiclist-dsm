@@ -102,10 +102,17 @@ const FILENAME_KEY_TO_FIELD: Record<string, (typeof FILENAME_TARGET_FIELDS)[numb
 
 export type GvlApplyFromDbPayload = { id: number; entry: GvlLabelEntry };
 
+type OnSaveTag = (
+  tags: AudioTags,
+  meta?: { multi: true; touchedKeys: readonly string[] }
+) => void | Promise<void>;
+
 type Props = {
   open: boolean;
   heading: string;
   initial: AudioTags;
+  /** Mehrere Titel: leere Felder, nur ausgefüllte (und bei Labelcode ggf. GVL-Bundle) werden gesetzt. */
+  multiTrack?: boolean;
   /** Dateiname oder Titel für P7S1-Zwischenablage (Suchpräfix bis zum ersten _). */
   p7SearchSource?: string | null;
   /** Zeile aus GVL-Tabelle → Tag-Felder überschreiben (id wechselt pro Klick). */
@@ -119,13 +126,14 @@ type Props = {
   showGvlDatabaseButton?: boolean;
   onOpenGvlDatabase: () => void;
   onClose: () => void;
-  onSave: (tags: AudioTags) => void | Promise<void>;
+  onSave: OnSaveTag;
 };
 
 export function TagEditorModal({
   open,
   heading,
   initial,
+  multiTrack = false,
   p7SearchSource = null,
   gvlApplyFromDb = null,
   gvlLabelDb = null,
@@ -136,6 +144,8 @@ export function TagEditorModal({
 }: Props) {
   const [form, setForm] = useState(() => formFromMerged(initial));
   const [warnToggle, setWarnToggle] = useState(() => warnungEffective(initial));
+  /** Nur bei multiTrack: welche Felder der Nutzer gesetzt hat (inkl. „warnung“). */
+  const [multiTouched, setMultiTouched] = useState<Set<string>>(() => new Set());
   const [saveBusy, setSaveBusy] = useState(false);
   const saveMountedRef = useRef(true);
   const [pasteDraft, setPasteDraft] = useState("");
@@ -165,16 +175,22 @@ export function TagEditorModal({
 
   useEffect(() => {
     if (!open) return;
-    setForm(formFromMerged(initial));
-    setWarnToggle(warnungEffective(initial));
-    prevR3InRechteRef.current = rechterueckrufImpliesWarnung(initial.gvlRechte);
+    if (multiTrack) {
+      setForm(formFromMerged({}));
+      setWarnToggle(false);
+      setMultiTouched(new Set());
+    } else {
+      setForm(formFromMerged(initial));
+      setWarnToggle(warnungEffective(initial));
+    }
+    prevR3InRechteRef.current = multiTrack ? false : rechterueckrufImpliesWarnung(initial.gvlRechte);
     setSaveBusy(false);
     setPasteDraft("");
     setOverwriteParsed(true);
-  }, [open, initial]);
+  }, [open, initial, multiTrack]);
 
   useEffect(() => {
-    if (!open || !gvlApplyFromDb) return;
+    if (!open || !gvlApplyFromDb || multiTrack) return;
     const { entry } = gvlApplyFromDb;
     setForm((prev) => ({
       ...prev,
@@ -194,7 +210,7 @@ export function TagEditorModal({
   }, [open, form.gvlRechte]);
 
   useEffect(() => {
-    if (!open || !p7SearchSource?.trim()) return;
+    if (!open || !p7SearchSource?.trim() || multiTrack) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
       const field = FILENAME_KEY_TO_FIELD[e.key.toLowerCase()];
@@ -208,7 +224,7 @@ export function TagEditorModal({
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [open, p7SearchSource, applyFilenameSelectionToField]);
+  }, [open, p7SearchSource, applyFilenameSelectionToField, multiTrack]);
 
   useEffect(() => {
     if (!filenameCtx) return;
@@ -290,13 +306,56 @@ export function TagEditorModal({
     });
   };
 
-  if (!open) return null;
-
-  const set =
+  const setStandard = useCallback(
     (key: keyof TagFormFields) =>
-    (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      setForm((prev) => ({ ...prev, [key]: e.target.value }));
-    };
+      (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        setForm((prev) => ({ ...prev, [key]: e.target.value }));
+      },
+    []
+  );
+
+  const setMultiField = useCallback(
+    (key: keyof TagFormFields) =>
+      (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        setMultiTouched((prev) => new Set(prev).add(key));
+        setForm((prev) => ({ ...prev, [key]: e.target.value }));
+      },
+    []
+  );
+
+  const onMultiLabelcodeChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.value;
+      setForm((prev) => {
+        let next = { ...prev, labelcode: v };
+        const lc = v.trim();
+        const touch = new Set<string>(["labelcode"]);
+        if (lc) {
+          const db = gvlLabelDb ?? loadGvlLabelDb();
+          const entry = findGvlEntryByLabelcode(db, lc);
+          if (entry) {
+            next = {
+              ...next,
+              label: entry.label,
+              hersteller: entry.hersteller,
+              gvlRechte: entry.rechterueckrufe,
+            };
+            touch.add("label");
+            touch.add("hersteller");
+            touch.add("gvlRechte");
+          }
+        }
+        setMultiTouched((prev) => new Set([...prev, ...touch]));
+        return next;
+      });
+    },
+    [gvlLabelDb]
+  );
+
+  const fieldSetter = multiTrack ? setMultiField : setStandard;
+  const labelcodeChangeHandler = multiTrack ? onMultiLabelcodeChange : setStandard("labelcode");
+
+  if (!open) return null;
 
   return (
     <div
@@ -312,7 +371,14 @@ export function TagEditorModal({
         <h2 id="tag-modal-title" className="modal-title">
           {heading}
         </h2>
-        {p7SearchSource?.trim() ? (
+        {multiTrack ? (
+          <p className="modal-lead modal-lead--tag-multi">
+            Mehrfachbearbeitung: Alle Felder starten leer. Nur Felder, die Sie ausfüllen oder ändern, werden auf{" "}
+            <strong>alle</strong> ausgewählten Titel übernommen — andere Tags je Titel bleiben unverändert. Beim
+            Labelcode werden bei Treffer in der GVL-Liste zusätzlich Label, Hersteller und Rechterückruf gesetzt.
+          </p>
+        ) : null}
+        {!multiTrack && p7SearchSource?.trim() ? (
           <div className="tag-filename-wrap">
             <p className="tag-filename-hint">
               Dateiname: markieren, dann Rechtsklick oder Tasten{" "}
@@ -330,6 +396,7 @@ export function TagEditorModal({
             </div>
           </div>
         ) : null}
+        {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
             Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Earmotion
@@ -355,31 +422,32 @@ export function TagEditorModal({
             Felder übernehmen
           </button>
         </div>
+        ) : null}
         <div className="tag-form">
           <label className="tag-field">
             <span>Songtitel</span>
-            <input type="text" value={form.songTitle} onChange={set("songTitle")} autoComplete="off" />
+            <input type="text" value={form.songTitle} onChange={fieldSetter("songTitle")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Interpret</span>
-            <input type="text" value={form.artist} onChange={set("artist")} autoComplete="off" />
+            <input type="text" value={form.artist} onChange={fieldSetter("artist")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Albumtitel</span>
-            <input type="text" value={form.album} onChange={set("album")} autoComplete="off" />
+            <input type="text" value={form.album} onChange={fieldSetter("album")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Jahr</span>
-            <input type="text" value={form.year} onChange={set("year")} autoComplete="off" />
+            <input type="text" value={form.year} onChange={fieldSetter("year")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Komponist</span>
-            <input type="text" value={form.composer} onChange={set("composer")} autoComplete="off" />
+            <input type="text" value={form.composer} onChange={fieldSetter("composer")} autoComplete="off" />
           </label>
           <div className="tag-field-row tag-field-row--comment-warn">
             <label className="tag-field">
               <span>Kommentar</span>
-              <textarea value={form.comment} onChange={set("comment")} rows={2} />
+              <textarea value={form.comment} onChange={fieldSetter("comment")} rows={2} />
             </label>
             <label className="tag-field tag-field--warnung-inline">
               <span>Warnung</span>
@@ -387,32 +455,36 @@ export function TagEditorModal({
                 type="checkbox"
                 className="tag-warn-switch"
                 checked={warnToggle}
-                onChange={(e) => setWarnToggle(e.target.checked)}
+                onChange={(e) => {
+                  if (multiTrack) setMultiTouched((prev) => new Set(prev).add("warnung"));
+                  setWarnToggle(e.target.checked);
+                }}
               />
             </label>
           </div>
           <label className="tag-field">
             <span>ISRC</span>
-            <input type="text" value={form.isrc} onChange={set("isrc")} autoComplete="off" />
+            <input type="text" value={form.isrc} onChange={fieldSetter("isrc")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Labelcode</span>
-            <input type="text" value={form.labelcode} onChange={set("labelcode")} autoComplete="off" />
+            <input type="text" value={form.labelcode} onChange={labelcodeChangeHandler} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Label</span>
-            <input type="text" value={form.label} onChange={set("label")} autoComplete="off" />
+            <input type="text" value={form.label} onChange={fieldSetter("label")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>Hersteller</span>
-            <input type="text" value={form.hersteller} onChange={set("hersteller")} autoComplete="off" />
+            <input type="text" value={form.hersteller} onChange={fieldSetter("hersteller")} autoComplete="off" />
           </label>
           <label className="tag-field">
             <span>{AUDIO_TAG_FIELD_LABELS.gvlRechte}</span>
-            <input type="text" value={form.gvlRechte} onChange={set("gvlRechte")} autoComplete="off" />
+            <input type="text" value={form.gvlRechte} onChange={fieldSetter("gvlRechte")} autoComplete="off" />
           </label>
         </div>
         <div className="modal-actions modal-actions--tag">
+          {!multiTrack ? (
           <div className="modal-actions--tag-left">
             <button
               type="button"
@@ -489,6 +561,9 @@ export function TagEditorModal({
               </button>
             ) : null}
           </div>
+          ) : (
+            <div className="modal-actions--tag-left" aria-hidden />
+          )}
           <div className="modal-actions--tag-right">
             <button type="button" className="btn-modal" onClick={onClose}>
               Abbrechen
@@ -496,11 +571,18 @@ export function TagEditorModal({
             <button
               type="button"
               className="btn-modal primary"
-              disabled={saveBusy}
+              disabled={saveBusy || (multiTrack && multiTouched.size === 0)}
               onClick={() => {
                 if (saveBusy) return;
+                if (multiTrack && multiTouched.size === 0) return;
                 setSaveBusy(true);
-                void Promise.resolve(onSave(formToAudioTags(form, warnToggle))).finally(() => {
+                const tags = formToAudioTags(form, warnToggle);
+                const p = multiTrack
+                  ? Promise.resolve(
+                      onSave(tags, { multi: true, touchedKeys: [...multiTouched] })
+                    )
+                  : Promise.resolve(onSave(tags));
+                void p.finally(() => {
                   if (saveMountedRef.current) setSaveBusy(false);
                 });
               }}

@@ -80,6 +80,29 @@ export async function deleteUserRequest(userId: string): Promise<void> {
   if (!res.ok) throw new Error(await parseError(res));
 }
 
+export async function updateUserRequest(
+  userId: string,
+  body: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    role: UserRole;
+    companyName?: string;
+    active?: boolean;
+  }
+): Promise<AppUserRecord> {
+  const t = getUsersApiToken();
+  if (!t) throw new Error("Nicht angemeldet.");
+  const res = await fetch(`${API}/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { user: AppUserRecord };
+  return data.user;
+}
+
 export async function changePasswordRequest(userId: string, newPassword: string): Promise<AppUserRecord> {
   const t = getUsersApiToken();
   if (!t) throw new Error("Nicht angemeldet.");

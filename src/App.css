@@ -2089,14 +2089,51 @@ body {
 
 .user-mgmt-table th:nth-child(5),
 .user-mgmt-table td:nth-child(5) {
-  width: 12%;
+  width: 11%;
 }
 
 .user-mgmt-table th:nth-child(6),
 .user-mgmt-table td:nth-child(6) {
-  width: 14%;
+  width: 11%;
+  vertical-align: middle;
+}
+
+.user-mgmt-table th:nth-child(7),
+.user-mgmt-table td:nth-child(7) {
+  width: 15%;
+  min-width: 10.75rem;
   text-align: right;
   white-space: nowrap;
+  vertical-align: middle;
+}
+
+.user-mgmt-row-inactive td:not(:nth-child(6)):not(:nth-child(7)) {
+  opacity: 0.55;
+}
+
+.user-mgmt-active-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.user-mgmt-active-toggle input {
+  margin: 0;
+  cursor: inherit;
+}
+
+.user-mgmt-active-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.user-mgmt-active-field input[type="checkbox"] {
+  width: auto;
+  margin: 0;
 }
 
 .user-mgmt-table-email {
@@ -2109,6 +2146,22 @@ body {
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--app-text-secondary);
+}
+
+.user-mgmt-row-actions {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.user-mgmt-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
 }
 
 .user-mgmt-add-form {
@@ -2211,8 +2264,8 @@ body {
 
 /** Nach `.modal` — sonst überschreibt `max-width: 440px` die Breite der Benutzerverwaltung. */
 .modal.modal--user-mgmt {
-  max-width: min(98vw, 1280px);
-  width: min(98vw, 1280px);
+  max-width: min(98vw, 1320px);
+  width: min(98vw, 1320px);
   box-sizing: border-box;
 }
 
@@ -2935,8 +2988,89 @@ body {
   color: var(--app-text-dim);
 }
 
+.modal-lead--tag-multi {
+  margin: -0.25rem 0 0.85rem;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--app-text-secondary);
+  background: rgba(180, 120, 40, 0.12);
+  border: 1px solid rgba(180, 120, 40, 0.35);
+  border-radius: 6px;
+}
+
 .modal--storage-paths {
   max-width: min(32rem, 96vw);
+}
+
+.storage-paths-data-root {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--app-text-secondary);
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border-soft);
+  border-radius: 8px;
+  word-break: break-word;
+}
+
+.storage-paths-path-label-only {
+  margin: 0 0 0.35rem;
+}
+
+.storage-paths-path-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0;
+}
+
+.storage-paths-data-root .storage-paths-path-row {
+  margin-top: 0.25rem;
+}
+
+.storage-paths-path-row__path {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.btn-storage-path-copy {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--app-border-hover);
+  background: var(--app-surface-input);
+  color: var(--app-chart-line);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-storage-path-copy:hover {
+  background: var(--app-border-panel);
+  color: var(--app-text);
+  border-color: var(--app-neutral-500);
+}
+
+.btn-storage-path-copy:focus-visible {
+  outline: 2px solid var(--app-focus);
+  outline-offset: 2px;
+}
+
+.storage-paths-server-path {
+  margin: 0.35rem 0 0;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: var(--app-surface-2);
+  border: 1px solid var(--app-border-soft);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  word-break: break-all;
+  color: var(--app-text);
 }
 
 .storage-paths-section {
@@ -3774,6 +3908,21 @@ table.table-resizable td:last-child {
   vertical-align: top;
 }
 
+/* Gleiche Zeilenhöhe aller <th>: Zusatzfläche zwischen Titelzeile und Filter verteilen,
+   nicht als Leerraum unter dem Filterfeld (stabiler bei Zoom/Skalierung). */
+.table-th-filter-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-height: 100%;
+  gap: 0.28rem;
+  box-sizing: border-box;
+}
+
+.table-th-filter-stack .table-col-filter-input {
+  margin-top: auto;
+}
+
 .table-th-head-row {
   display: flex;
   align-items: center;
@@ -3817,7 +3966,7 @@ table.table-resizable td:last-child {
   z-index: 7;
   width: 100%;
   min-width: 0;
-  margin-top: 0.28rem;
+  margin-top: 0;
   box-sizing: border-box;
   font: inherit;
   font-size: 0.68rem;
@@ -3862,6 +4011,27 @@ table.table-resizable td:last-child {
   flex: 1 1 auto;
 }
 
+.panel-edl-playlist-title-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.panel-edl-playlist-title-stack .panel-mp3-title-cluster {
+  flex: 0 1 auto;
+  width: 100%;
+}
+
+.panel-edl-playlist-title-stack .panel-title-meta {
+  align-self: stretch;
+  margin: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .panel-mp3-hidden-cols {
   display: flex;
   flex-wrap: wrap;
@@ -3893,7 +4063,8 @@ table.table-resizable td:last-child {
 
 .table-th-col-dnd .table-th-head-row {
   gap: 0.2rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .table-th-col-drag-handle {
@@ -3964,15 +4135,6 @@ table.table-resizable td:last-child {
 .table-th-col-hide:disabled {
   opacity: 0.35;
   cursor: not-allowed;
-}
-
-.panel-title-meta--beside-title {
-  flex: 1 1 0;
-  min-width: 0;
-  margin: 0;
-  justify-content: flex-end;
-  text-align: right;
-  font-size: 0.68rem;
 }
 
 .panel-head-edl-actions {

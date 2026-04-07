@@ -308,3 +308,17 @@ export async function touchMusicDbTagEdited(relativePath: string): Promise<Music
     return map[k]!;
   });
 }
+
+/** Absolute Pfade auf dem API-Server (Anzeige z. B. im Dialog „Speicherpfade“). */
+export function getResolvedServerStoragePaths(userId: string): {
+  dataDir: string;
+  sharedDir: string;
+  tracksDir: string;
+  edlLibraryDir: string;
+} {
+  const dataDir = path.resolve(getDataDir());
+  const sharedDir = path.join(dataDir, "shared");
+  const tracksDir = path.join(sharedDir, "tracks");
+  const edlLibraryDir = path.join(dataDir, "users", userId, "edl");
+  return { dataDir, sharedDir, tracksDir, edlLibraryDir };
+}

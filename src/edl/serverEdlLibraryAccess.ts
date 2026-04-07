@@ -3,6 +3,7 @@ import {
   apiEdlDeleteFile,
   apiEdlList,
   apiEdlMkdir,
+  apiEdlMoveDirectory,
   apiEdlMoveFile,
   apiEdlReadBinary,
   apiEdlReadText,
@@ -27,6 +28,8 @@ export function createServerEdlLibraryAccess(): EdlLibraryAccess {
     mkdir: (parentSegments, name) => apiEdlMkdir(parentSegments, name),
     moveFile: (fromSegments, fileName, toSegments) =>
       apiEdlMoveFile(fromSegments, fileName, toSegments),
+    moveDirectory: (fromParentSegments, folderName, toParentSegments) =>
+      apiEdlMoveDirectory(fromParentSegments, folderName, toParentSegments),
     deleteFile: (segments, fileName) => apiEdlDeleteFile(segments, fileName),
     deleteDirectory: (pathSegments) => apiEdlDeleteDirectory(pathSegments),
     renameDirectory: (parentSegments, oldName, newName) =>

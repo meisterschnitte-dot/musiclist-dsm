@@ -6,7 +6,10 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import rateLimit from "express-rate-limit";
+import multer from "multer";
 import nodemailer from "nodemailer";
+import fsPromises from "node:fs/promises";
+import os from "node:os";
 import { INITIAL_INVITE_PASSWORD } from "./constants";
 import { bearerAuth, requireAdmin } from "./authMiddleware";
 import { createCustomerEdlRouter } from "./customerEdlRoutes";
@@ -19,6 +22,9 @@ import { createCustomersRouter } from "./customersRoutes";
 import { createUserApiRouter } from "./userRoutes";
 import { createUserEdlRouter } from "./userEdlRoutes";
 import { createSharedTracksRouter } from "./sharedTracksRoutes";
+import { getResolvedServerStoragePaths } from "./sharedTracksFs";
+import { streamFullDataBackupZip } from "./fullBackup";
+import { restoreDataDirectoryFromBackupZip } from "./restoreBackup";
 
 const PORT =
   Number(process.env.MUSICLIST_MAIL_PORT || process.env.EASY_GEMA_MAIL_PORT) || 5274;
@@ -97,6 +103,15 @@ async function sendEmail(props: { to: string; subject: string; text: string }): 
 
 const app = express();
 
+/** ZIP-Upload für Havarie-Wiederherstellung (Admin); typisch &lt; 1 GB — Nginx ggf. `client_max_body_size` erhöhen. */
+const uploadRestoreBackup = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+    filename: (_req, _file, cb) => cb(null, `musiclist-restore-${Date.now()}-${process.pid}.zip`),
+  }),
+  limits: { fileSize: 1536 * 1024 * 1024 },
+});
+
 // --- Security ---
 app.use(cors({
   origin: process.env.NODE_ENV === "production" ? ALLOWED_ORIGINS : true,
@@ -128,6 +143,69 @@ app.use("/api", createUserEdlRouter());
 app.use("/api", createCustomerEdlRouter());
 app.use("/api", createSharedTracksRouter());
 app.use("/api", createCustomersRouter());
+
+/** Nur Admins: vollständige ZIP-Sicherung von `data/` inkl. MP3s (Streaming). */
+app.get("/api/admin/full-backup", bearerAuth, requireAdmin, (_req, res) => {
+  streamFullDataBackupZip(res);
+});
+
+/** Nur Admins: ZIP einer früheren Datensicherung einspielen (ersetzt `data/`; altes Verzeichnis → `data.pre-restore-*`). */
+app.post(
+  "/api/admin/restore-backup",
+  bearerAuth,
+  requireAdmin,
+  (req, res, next) => {
+    uploadRestoreBackup.single("backup")(req, res, (err: unknown) => {
+      if (err) {
+        const m = err instanceof Error ? err.message : String(err);
+        const code = (err as { code?: string }).code;
+        if (code === "LIMIT_FILE_SIZE") {
+          res.status(413).json({ error: "Datei zu groß (max. ca. 1,5 GB)." });
+          return;
+        }
+        res.status(400).json({ error: m || "Upload fehlgeschlagen." });
+        return;
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    const file = (req as express.Request & { file?: Express.Multer.File }).file;
+    const zipPath = file?.path;
+    if (!zipPath) {
+      res.status(400).json({ error: "Keine ZIP-Datei (Formularfeld backup)." });
+      return;
+    }
+    try {
+      const { previousDataRenamedTo } = await restoreDataDirectoryFromBackupZip(zipPath);
+      res.json({ ok: true, previousDataRenamedTo });
+    } catch (e) {
+      console.error("[Musiclist API] restore-backup:", e);
+      res.status(500).json({
+        error: e instanceof Error ? e.message : "Wiederherstellung fehlgeschlagen.",
+      });
+    } finally {
+      await fsPromises.unlink(zipPath).catch(() => {});
+    }
+  }
+);
+
+/** Angemeldete Nutzer: echte Serverpfade (kleines Team, intern). */
+app.get("/api/storage-paths", bearerAuth, (req, res) => {
+  try {
+    const uid = req.authUser?.id;
+    if (!uid) {
+      res.status(401).json({ error: "Nicht angemeldet." });
+      return;
+    }
+    res.json(getResolvedServerStoragePaths(uid));
+  } catch (e) {
+    console.error("[Musiclist API] storage-paths:", e);
+    res.status(500).json({
+      error: e instanceof Error ? e.message : "Speicherpfade konnten nicht ermittelt werden.",
+    });
+  }
+});
 
 app.post("/api/send-mail", bearerAuth, requireAdmin, async (req, res) => {
   try {
