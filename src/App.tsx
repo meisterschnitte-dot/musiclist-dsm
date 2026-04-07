@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,6 +15,7 @@ import {
   AUDIO_TAG_FIELD_LABELS,
   AUDIO_TAG_TABLE_COLUMN_KEYS,
   defaultTagsFromPlaylistTitle,
+  DUPLICATE_MODAL_DISPLAY_KEYS,
   hasAnyAudioTagValue,
   mergeAudioTags,
   mergeWarnungForDisplay,
@@ -437,41 +439,78 @@ function splitPathForDupModal(raw: string): { dir: string; base: string } {
   return { dir: t.slice(0, i + 1), base: t.slice(i + 1) };
 }
 
-/** Nur Song/Komponist/GVL — nebeneinander im Duplikat-Dialog; Jahr/Kommentar/ISRC u. a. weglassen. */
-const DUP_MODAL_TAG_KEYS: (keyof AudioTags)[] = [
-  "songTitle",
-  "artist",
-  "album",
-  "composer",
-  "labelcode",
-  "label",
-  "hersteller",
-  "gvlRechte",
-];
+function dupModalNorm(s: unknown): string {
+  return typeof s === "string" ? s.trim() : "";
+}
 
-function DupModalTagPreview({ tags }: { tags: AudioTags }) {
-  const cells: { key: string; label: string; value: string }[] = [];
-  for (const k of DUP_MODAL_TAG_KEYS) {
-    const v = tags[k];
-    const t = typeof v === "string" ? v.trim() : "";
-    if (!t) continue;
-    cells.push({ key: k, label: AUDIO_TAG_FIELD_LABELS[k], value: t });
+function initDupModalTagDrafts(info: DuplicatePrompt): {
+  proposed: AudioTags;
+  candidates: Record<string, AudioTags>;
+} {
+  const proposed: AudioTags = { ...info.proposedTags };
+  for (const k of DUPLICATE_MODAL_DISPLAY_KEYS) {
+    const v = proposed[k];
+    (proposed as Record<string, string | undefined>)[k] = typeof v === "string" ? v : "";
   }
-  if (cells.length === 0) {
-    return (
-      <p className="modal-dup-tags-empty">
-        Keine Angaben zu Songtitel, Interpret, Album, Komponist oder GVL (oder nicht lesbar).
-      </p>
-    );
+  const candidates: Record<string, AudioTags> = {};
+  for (const c of info.candidates) {
+    const t: AudioTags = { ...(info.candidateTagsByPath[c.existingFileName] ?? {}) };
+    for (const k of DUPLICATE_MODAL_DISPLAY_KEYS) {
+      const v = t[k];
+      (t as Record<string, string | undefined>)[k] = typeof v === "string" ? v : "";
+    }
+    candidates[c.existingFileName] = t;
   }
+  return { proposed, candidates };
+}
+
+function dupDraftFormToPersistedTags(draft: AudioTags): AudioTags {
+  const o: AudioTags = {};
+  for (const k of DUPLICATE_MODAL_DISPLAY_KEYS) {
+    const v = draft[k];
+    if (typeof v === "string" && v.trim()) (o as Record<string, string>)[k] = v.trim();
+  }
+  return mergeWarnungForDisplay(o);
+}
+
+function DupModalTagFields({
+  tags,
+  onTagsChange,
+  diffBaseline,
+  fieldIdPrefix,
+}: {
+  tags: AudioTags;
+  onTagsChange: (next: AudioTags) => void;
+  /** Wenn gesetzt: Felder hervorheben, die nicht mit dem neuen Datensatz übereinstimmen. */
+  diffBaseline?: AudioTags;
+  fieldIdPrefix: string;
+}) {
   return (
-    <div className="modal-dup-tags modal-dup-tags--row">
-      {cells.map(({ key, label, value }) => (
-        <div key={key} className="modal-dup-tag-cell">
-          <span className="modal-dup-tag-k">{label}</span>
-          <span className="modal-dup-tag-v">{value}</span>
-        </div>
-      ))}
+    <div className="modal-dup-tag-form modal-dup-tag-form--row">
+      {DUPLICATE_MODAL_DISPLAY_KEYS.map((k) => {
+        const val = (typeof tags[k] === "string" ? tags[k] : "") ?? "";
+        const diff =
+          diffBaseline !== undefined && dupModalNorm(diffBaseline[k]) !== dupModalNorm(val);
+        const fid = `${fieldIdPrefix}-${String(k)}`;
+        return (
+          <div
+            key={k}
+            className={`modal-dup-tag-field${diff ? " modal-dup-tag-field--diff" : ""}`}
+          >
+            <label className="modal-dup-tag-form-label" htmlFor={fid}>
+              {AUDIO_TAG_FIELD_LABELS[k]}
+            </label>
+            <input
+              id={fid}
+              className="modal-dup-tag-form-input"
+              type="text"
+              value={val}
+              autoComplete="off"
+              onChange={(e) => onTagsChange({ ...tags, [k]: e.target.value })}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -669,6 +708,8 @@ export default function App() {
   const [drag, setDrag] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [dupModal, setDupModal] = useState<DupModalState | null>(null);
+  const [dupTagDraftProposed, setDupTagDraftProposed] = useState<AudioTags>({});
+  const [dupTagDraftCandidates, setDupTagDraftCandidates] = useState<Record<string, AudioTags>>({});
   /** Testumgebung: nach erstem Dialog dieselbe Entscheidung für alle weiteren Konflikte (Pfad jeweils = erster Treffer). */
   const dupApplyAllRef = useRef<"identical" | "different" | null>(null);
   const [dupApplyAllChecked, setDupApplyAllChecked] = useState(false);
@@ -1475,13 +1516,19 @@ export default function App() {
   const askDuplicate = useCallback((info: DuplicatePrompt) => {
     const preset = dupApplyAllRef.current;
     if (preset !== null && info.candidates.length > 0) {
+      const proposed = mergeWarnungForDisplay({ ...info.proposedTags });
       if (preset === "identical") {
+        const exPath = info.candidates[0].existingFileName;
         return Promise.resolve({
           action: "identical" as const,
-          existingFileName: info.candidates[0].existingFileName,
+          existingFileName: exPath,
+          proposedTagsEdited: proposed,
+          existingFileTagsEdited: mergeWarnungForDisplay({
+            ...(info.candidateTagsByPath[exPath] ?? {}),
+          }),
         });
       }
-      return Promise.resolve({ action: "different" as const });
+      return Promise.resolve({ action: "different" as const, proposedTagsEdited: proposed });
     }
     return new Promise<DuplicateChoice>((resolve) => {
       setDupModal({ ...info, resolve });
@@ -1490,6 +1537,13 @@ export default function App() {
 
   useEffect(() => {
     if (dupModal) setDupApplyAllChecked(false);
+  }, [dupModal]);
+
+  useLayoutEffect(() => {
+    if (!dupModal) return;
+    const { proposed, candidates } = initDupModalTagDrafts(dupModal);
+    setDupTagDraftProposed(proposed);
+    setDupTagDraftCandidates(candidates);
   }, [dupModal]);
 
   useEffect(() => {
@@ -1979,7 +2033,12 @@ export default function App() {
           loadedLibraryFileName: loadedLibraryFile?.fileName ?? null,
         });
         const sink = createSharedFakeMp3Sink();
-        const { updates, identicalChoiceIndices } = await exportFakeTracksToSharedStorage(
+        const {
+          updates,
+          identicalChoiceIndices,
+          duplicateProposedTagsByIndex,
+          duplicateIdenticalFileTagsByIndex,
+        } = await exportFakeTracksToSharedStorage(
           playlist,
           sink,
           {
@@ -2034,8 +2093,12 @@ export default function App() {
           exportPersistToFileKeys.push({ key: fk, overlay, playlistRowId: row.id });
         }
 
+        const dupFromModalIndices = new Set(
+          duplicateProposedTagsByIndex ? Object.keys(duplicateProposedTagsByIndex).map(Number) : []
+        );
         const playlistTagCopiesFromDb: { key: string; overlay: AudioTags }[] = [];
         for (const idx of identicalChoiceIndices) {
+          if (dupFromModalIndices.has(idx)) continue;
           const row = mergedPlaylist[idx];
           if (!row) continue;
           const u = updates.find((x) => x.index === idx);
@@ -2057,7 +2120,13 @@ export default function App() {
             overlay: overlayFromForm(playlistBase, fileFull),
           });
         }
-        if (playlistTagCopiesFromDb.length || exportPersistToFileKeys.length) {
+        const hasDupModalTags =
+          (duplicateProposedTagsByIndex &&
+            Object.keys(duplicateProposedTagsByIndex).length > 0) ||
+          (duplicateIdenticalFileTagsByIndex &&
+            Object.keys(duplicateIdenticalFileTagsByIndex).length > 0);
+
+        if (playlistTagCopiesFromDb.length || exportPersistToFileKeys.length || hasDupModalTags) {
           setTagStore((prev) => {
             const next = { ...prev };
             for (const { key, overlay } of playlistTagCopiesFromDb) {
@@ -2066,6 +2135,18 @@ export default function App() {
             for (const { key, overlay, playlistRowId } of exportPersistToFileKeys) {
               next[key] = overlay;
               delete next[playlistTagKey(playlistRowId)];
+            }
+            for (const [idxStr, formTags] of Object.entries(duplicateProposedTagsByIndex ?? {})) {
+              const idx = Number(idxStr);
+              const row = mergedPlaylist[idx];
+              if (!row) continue;
+              const playlistBase = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+              next[playlistTagKey(row.id)] = overlayFromForm(playlistBase, formTags);
+            }
+            for (const [, ent] of Object.entries(duplicateIdenticalFileTagsByIndex ?? {})) {
+              const fk = fileTagKey(ent.relativePath);
+              const fileBase = defaultTagsFromPlaylistTitle(ent.relativePath);
+              next[fk] = overlayFromForm(fileBase, ent.tags);
             }
             persistTagStore(next);
             return next;
@@ -5204,7 +5285,6 @@ export default function App() {
                   <p className="modal-dup-candidate-hint">Neuer / geplanter Dateiname</p>
                   <div className="modal-dup-grid modal-dup-grid--inline">
                     <div className="modal-dup-pathfile-col">
-                      <span className="modal-label modal-dup-path-label">Ordner und Dateiname</span>
                       <div className="modal-dup-path-filename-line">
                         <span
                           className="modal-dup-dir modal-dup-dir--empty"
@@ -5217,12 +5297,15 @@ export default function App() {
                     </div>
                     <div className="modal-dup-cell modal-dup-cell--action modal-dup-cell--action-spacer" />
                   </div>
-                  <p className="modal-dup-tags-caption">Tags (wie für die neue Datei vorgesehen)</p>
-                  <DupModalTagPreview tags={dupModal.proposedTags} />
+                  <DupModalTagFields
+                    fieldIdPrefix="dup-new"
+                    tags={dupTagDraftProposed}
+                    onTagsChange={setDupTagDraftProposed}
+                  />
                 </div>
 
                 <p className="modal-dup-section-title modal-dup-hits-title">Treffer in der Musikdatenbank</p>
-                {dupModal.candidates.map((c) => {
+                {dupModal.candidates.map((c, hitIdx) => {
                   const sp = splitPathForDupModal(c.existingFileName);
                   return (
                     <div className="modal-dup-candidate-block" key={c.existingFileName}>
@@ -5233,7 +5316,6 @@ export default function App() {
                       </p>
                       <div className="modal-dup-grid modal-dup-grid--inline">
                         <div className="modal-dup-pathfile-col">
-                          <span className="modal-label modal-dup-path-label">Ordner und Dateiname</span>
                           <div className="modal-dup-path-filename-line">
                             <span
                               className="modal-dup-dir"
@@ -5254,6 +5336,10 @@ export default function App() {
                               resolveDuplicate({
                                 action: "identical",
                                 existingFileName: c.existingFileName,
+                                proposedTagsEdited: dupDraftFormToPersistedTags(dupTagDraftProposed),
+                                existingFileTagsEdited: dupDraftFormToPersistedTags(
+                                  dupTagDraftCandidates[c.existingFileName] ?? {}
+                                ),
                               })
                             }
                           >
@@ -5261,8 +5347,17 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      <p className="modal-dup-tags-caption">Tags in dieser Datei</p>
-                      <DupModalTagPreview tags={dupModal.candidateTagsByPath[c.existingFileName] ?? {}} />
+                      <DupModalTagFields
+                        fieldIdPrefix={`dup-hit-${hitIdx}`}
+                        tags={dupTagDraftCandidates[c.existingFileName] ?? {}}
+                        onTagsChange={(next) =>
+                          setDupTagDraftCandidates((prev) => ({
+                            ...prev,
+                            [c.existingFileName]: next,
+                          }))
+                        }
+                        diffBaseline={dupTagDraftProposed}
+                      />
                     </div>
                   );
                 })}
@@ -5281,7 +5376,12 @@ export default function App() {
               <button
                 type="button"
                 className="btn-modal"
-                onClick={() => resolveDuplicate({ action: "different" })}
+                onClick={() =>
+                  resolveDuplicate({
+                    action: "different",
+                    proposedTagsEdited: dupDraftFormToPersistedTags(dupTagDraftProposed),
+                  })
+                }
               >
                 Ist nicht identisch
               </button>

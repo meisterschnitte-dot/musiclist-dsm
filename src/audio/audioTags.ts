@@ -105,6 +105,22 @@ export const AUDIO_TAG_TABLE_COLUMN_KEYS: (keyof AudioTags)[] = [
   "gvlRechte",
 ];
 
+/**
+ * Duplikat-Dialog „Datensatz möglicherweise vorhanden“: feste Felder für Abgleich und Bearbeitung.
+ * Reihenfolge = Anzeige (Songtitel … Rechterückruf).
+ */
+export const DUPLICATE_MODAL_DISPLAY_KEYS: (keyof AudioTags)[] = [
+  "songTitle",
+  "artist",
+  "album",
+  "composer",
+  "labelcode",
+  "isrc",
+  "label",
+  "hersteller",
+  "gvlRechte",
+];
+
 export const AUDIO_TAG_FIELD_LABELS: Record<keyof AudioTags, string> = {
   songTitle: "Songtitel",
   artist: "Interpret",

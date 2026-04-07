@@ -1,6 +1,7 @@
-import { mergeWarnungForDisplay, type AudioTags } from "../audio/audioTags";
+import { hasAnyAudioTagValue, mergeWarnungForDisplay, type AudioTags } from "../audio/audioTags";
 import { embedId3InMp3Blob } from "../audio/embedId3";
 import { readAudioTagsFromBlob } from "../audio/readId3Tags";
+import { writeAudioTagsToSharedMp3 } from "../audio/writeAudioTagsToSharedMp3";
 import { apiSharedTracksReadBinary } from "../api/sharedTracksApi";
 import { titlesLikelySame } from "../edl/similarTitle";
 import type { PlaylistEntry } from "../edl/types";
@@ -66,8 +67,15 @@ export type DuplicatePrompt = {
 };
 
 export type DuplicateChoice =
-  | { action: "different" }
-  | { action: "identical"; existingFileName: string };
+  | { action: "different"; proposedTagsEdited: AudioTags }
+  | {
+      action: "identical";
+      existingFileName: string;
+      /** Tags für die Playlist-Zeile („Neu“) — wie im Dialog bearbeitet. */
+      proposedTagsEdited: AudioTags;
+      /** Tags für die bestehende MP3 — wie im Dialog bearbeitet (ID3 wird aktualisiert). */
+      existingFileTagsEdited: AudioTags;
+    };
 
 /** Alle `.mp3`-Pfade relativ zum Speicherort-Root (rekursiv, Ordnerübergreifend). */
 async function listAllMp3RelativePathsUnderRoot(
@@ -126,6 +134,25 @@ async function readTagsFromSharedMp3Path(relativePath: string): Promise<AudioTag
   } catch {
     return {};
   }
+}
+
+async function rewriteLocalMp3Id3(
+  rootDir: FileSystemDirectoryHandle,
+  relativePath: string,
+  tags: AudioTags
+): Promise<void> {
+  const parts = relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
+  if (parts.length === 0) return;
+  let dir = rootDir;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i]!, { create: false });
+  }
+  const fh = await dir.getFileHandle(parts[parts.length - 1]!, { create: false });
+  const file = await fh.getFile();
+  const blob = await embedId3InMp3Blob(file, mergeWarnungForDisplay(tags));
+  const writable = await fh.createWritable();
+  await writable.write(await blob.arrayBuffer());
+  await writable.close();
 }
 
 async function readTagsFromLocalMp3Path(
@@ -198,6 +225,10 @@ export type ExportTracksResult = {
   updates: { index: number; linkedTrackFileName: string }[];
   /** Playlist-Indizes, bei denen der Nutzer eine bereits vorhandene Datei als identisch gewählt hat (keine neue MP3 geschrieben). */
   identicalChoiceIndices: number[];
+  /** Tag-Stand „Neu“ aus dem Duplikat-Dialog (Playlist-Overlay). */
+  duplicateProposedTagsByIndex?: Record<number, AudioTags>;
+  /** Bei „identisch“: bestehende Datei — ID3 wurde geschrieben; f:-Overlay nachziehen. */
+  duplicateIdenticalFileTagsByIndex?: Record<number, { relativePath: string; tags: AudioTags }>;
 };
 
 /**
@@ -211,6 +242,11 @@ export async function exportFakeTracksToTracksFolder(
 ): Promise<ExportTracksResult> {
   const updates: { index: number; linkedTrackFileName: string }[] = [];
   const identicalChoiceIndices: number[] = [];
+  const duplicateProposedTagsByIndex: Record<number, AudioTags> = {};
+  const duplicateIdenticalFileTagsByIndex: Record<
+    number,
+    { relativePath: string; tags: AudioTags }
+  > = {};
 
   const folderStem =
     projectFolderName?.trim() && projectFolderName.trim().length > 0
@@ -262,16 +298,24 @@ export async function exportFakeTracksToTracksFolder(
         candidateTagsByPath,
       });
 
+      const propMerged = mergeWarnungForDisplay(choice.proposedTagsEdited);
+      duplicateProposedTagsByIndex[index] = propMerged;
+
       if (choice.action === "identical") {
         /** Bereits relativ zum Speicherort-Root — kein Projekt-Präfix (kann anderer Ordner sein). */
         storedRelativePath = choice.existingFileName;
         identicalChoiceIndices.push(index);
+        const exMerged = mergeWarnungForDisplay(choice.existingFileTagsEdited);
+        duplicateIdenticalFileTagsByIndex[index] = {
+          relativePath: choice.existingFileName,
+          tags: exMerged,
+        };
+        await rewriteLocalMp3Id3(tracksDir, choice.existingFileName, choice.existingFileTagsEdited);
       } else {
         const newBasename = await nextFreeMp3Name(targetDir, stem, usedBasenamesLower);
         let blob: Blob = createFakeMp3Blob();
-        const tagOpt = getTagsForIndex?.(index);
-        if (tagOpt) {
-          blob = await embedId3InMp3Blob(blob, tagOpt);
+        if (hasAnyAudioTagValue(propMerged)) {
+          blob = await embedId3InMp3Blob(blob, propMerged);
         }
         await writeMp3(targetDir, newBasename, blob);
         usedBasenamesLower.add(newBasename.toLowerCase());
@@ -293,7 +337,16 @@ export async function exportFakeTracksToTracksFolder(
     updates.push({ index, linkedTrackFileName: storedRelativePath });
   }
 
-  return { updates, identicalChoiceIndices };
+  return {
+    updates,
+    identicalChoiceIndices,
+    duplicateProposedTagsByIndex:
+      Object.keys(duplicateProposedTagsByIndex).length > 0 ? duplicateProposedTagsByIndex : undefined,
+    duplicateIdenticalFileTagsByIndex:
+      Object.keys(duplicateIdenticalFileTagsByIndex).length > 0
+        ? duplicateIdenticalFileTagsByIndex
+        : undefined,
+  };
 }
 
 /** Server-Speicher (installationsweit): list/exists/write per Callback. */
@@ -302,6 +355,21 @@ export type SharedFakeMp3Sink = {
   fileExists: (relativePath: string) => Promise<boolean>;
   writeMp3Blob: (relativePath: string, blob: Blob) => Promise<void>;
 };
+
+async function rewriteSharedMp3Id3(
+  relativePath: string,
+  tags: AudioTags,
+  sink: SharedFakeMp3Sink
+): Promise<void> {
+  await writeAudioTagsToSharedMp3(
+    apiSharedTracksReadBinary,
+    async (rel, data) => {
+      await sink.writeMp3Blob(rel, new Blob([data], { type: "audio/mpeg" }));
+    },
+    relativePath,
+    tags
+  );
+}
 
 async function nextFreeMp3NameShared(
   prefixRel: string,
@@ -332,6 +400,11 @@ export async function exportFakeTracksToSharedStorage(
 ): Promise<ExportTracksResult> {
   const updates: { index: number; linkedTrackFileName: string }[] = [];
   const identicalChoiceIndices: number[] = [];
+  const duplicateProposedTagsByIndex: Record<number, AudioTags> = {};
+  const duplicateIdenticalFileTagsByIndex: Record<
+    number,
+    { relativePath: string; tags: AudioTags }
+  > = {};
 
   const folderStem =
     projectFolderName?.trim() && projectFolderName.trim().length > 0
@@ -385,9 +458,18 @@ export async function exportFakeTracksToSharedStorage(
         candidateTagsByPath,
       });
 
+      const propMerged = mergeWarnungForDisplay(choice.proposedTagsEdited);
+      duplicateProposedTagsByIndex[index] = propMerged;
+
       if (choice.action === "identical") {
         storedRelativePath = choice.existingFileName;
         identicalChoiceIndices.push(index);
+        const exMerged = mergeWarnungForDisplay(choice.existingFileTagsEdited);
+        duplicateIdenticalFileTagsByIndex[index] = {
+          relativePath: choice.existingFileName,
+          tags: exMerged,
+        };
+        await rewriteSharedMp3Id3(choice.existingFileName, choice.existingFileTagsEdited, sink);
       } else {
         const newBasename = await nextFreeMp3NameShared(
           prefixRel,
@@ -396,9 +478,8 @@ export async function exportFakeTracksToSharedStorage(
           sink.fileExists
         );
         let blob: Blob = createFakeMp3Blob();
-        const tagOpt = getTagsForIndex?.(index);
-        if (tagOpt) {
-          blob = await embedId3InMp3Blob(blob, tagOpt);
+        if (hasAnyAudioTagValue(propMerged)) {
+          blob = await embedId3InMp3Blob(blob, propMerged);
         }
         storedRelativePath = prefixRel ? `${prefixRel}${newBasename}` : newBasename;
         await sink.writeMp3Blob(storedRelativePath, blob);
@@ -425,6 +506,15 @@ export async function exportFakeTracksToSharedStorage(
     updates.push({ index, linkedTrackFileName: storedRelativePath });
   }
 
-  return { updates, identicalChoiceIndices };
+  return {
+    updates,
+    identicalChoiceIndices,
+    duplicateProposedTagsByIndex:
+      Object.keys(duplicateProposedTagsByIndex).length > 0 ? duplicateProposedTagsByIndex : undefined,
+    duplicateIdenticalFileTagsByIndex:
+      Object.keys(duplicateIdenticalFileTagsByIndex).length > 0
+        ? duplicateIdenticalFileTagsByIndex
+        : undefined,
+  };
 }
 
