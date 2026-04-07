@@ -2907,6 +2907,11 @@ body {
   border-bottom: 1px solid var(--app-border);
 }
 
+.gvl-sync-compare-table th:first-child,
+.gvl-sync-compare-table td:first-child {
+  white-space: nowrap;
+}
+
 .gvl-sync-compare-table th {
   font-weight: 600;
   font-size: 0.78rem;
@@ -3292,24 +3297,63 @@ body {
   gap: 1rem;
 }
 
-/* Duplikat-Dialog: groß, Titel scrollbar, Buttons unten fix */
+/* Duplikat-Dialog: sehr breit, Tags + Pfade, Buttons unten fix */
+.modal-backdrop--dup-wide {
+  padding: 0.75rem min(1.25rem, 2vw);
+  align-items: center;
+  justify-content: center;
+}
+
 .modal--dup {
-  max-width: min(960px, 94vw);
-  width: 100%;
-  max-height: min(88vh, 920px);
+  /* 10-px-Raster: Dateiname beginnt an Spalte 54 (= 54 × 10 px von links im Dialoginhalt) */
+  --dup-filename-grid-col: 54;
+  --dup-filename-start: calc(var(--dup-filename-grid-col) * 10px);
+  position: relative;
+  isolation: isolate;
+  max-width: min(1800px, 99vw);
+  width: min(1800px, 99vw);
+  max-height: min(96vh, 1240px);
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.modal--dup .modal-title {
-  font-size: 1.18rem;
+.modal--dup .modal-dup-header,
+.modal--dup .modal-dup-scroll,
+.modal--dup .modal-actions--dup {
+  position: relative;
+  z-index: 2;
 }
 
-.modal-lead--dup {
+.modal--dup .modal-title {
+  font-size: 1.18rem;
+  margin: 0;
+}
+
+.modal-dup-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.75rem;
   flex-shrink: 0;
-  font-size: 1rem;
-  line-height: 1.5;
+}
+
+.modal-dup-header-question {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--app-text);
+  flex: 0 1 auto;
+}
+
+.modal-lead--dup-inline {
+  margin: 0;
+  flex: 1 1 14rem;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--app-text-secondary);
+  max-width: min(62ch, 100%);
 }
 
 .modal-dup-split .modal-label {
@@ -3318,8 +3362,8 @@ body {
 
 .modal-dup-scroll {
   flex: 1 1 auto;
-  min-height: 10rem;
-  max-height: min(58vh, 640px);
+  min-height: 14rem;
+  max-height: min(78vh, 1080px);
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 0.35rem;
@@ -3339,30 +3383,164 @@ body {
   font-size: 1rem;
 }
 
-.modal-dup-row {
+.modal-dup-section {
+  margin: 0;
+}
+
+.modal-dup-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--app-text-secondary);
+  letter-spacing: 0.02em;
+}
+
+.modal-dup-hits-title {
+  margin-top: 1rem;
+}
+
+.modal-dup-candidate-block--new {
+  padding-bottom: 0.65rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid var(--app-border-soft);
+}
+
+.modal-dup-grid--inline {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  column-gap: 1.5rem;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem 0.85rem;
+  align-items: center;
 }
 
-.modal-dup-folder-block {
+.modal-dup-pathfile-col {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.35rem;
-  width: 100%;
+  gap: 0.3rem;
   min-width: 0;
 }
 
-.modal-dup-name-block {
+/**
+ * Ordner links (bis Raster-Spalte 54), Dateiname ab fester Kante — alle Dateinamen bündig.
+ */
+.modal--dup .modal-dup-path-filename-line {
+  display: grid;
+  /* Erste Spalte exakt bis Raster 54 (Dateiname beginnt an derselben horizontalen Kante) */
+  grid-template-columns: var(--dup-filename-start, 540px) minmax(0, 1fr);
+  column-gap: 0;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.modal--dup .modal-dup-path-filename-line .modal-dup-dir {
+  grid-column: 1;
+  width: auto;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.modal--dup .modal-dup-path-filename-line .modal-dup-filename {
+  grid-column: 2;
+  width: auto;
+  max-width: 100%;
+  font-weight: 600;
+}
+
+.modal-dup-cell--action {
+  justify-self: end;
+  align-self: center;
+}
+
+.modal-dup-grid--inline .modal-dup-cell--action {
+  padding-top: 0;
+}
+
+.modal-dup-cell--action-spacer {
+  visibility: hidden;
+  pointer-events: none;
+  min-width: 5.5rem;
+  min-height: 2.35rem;
+}
+
+.modal-dup-tags-caption {
+  margin: 0.65rem 0 0.35rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-text-secondary);
+}
+
+.modal-dup-tags {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+}
+
+/* Nebeneinander, umbrechend — bleibt bei wenig Platz nutzbar (auto-fit + Mindestbreite). */
+.modal-dup-tags--row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.25rem, 1fr));
+  gap: 0.45rem 0.55rem;
+  align-items: stretch;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--app-border-soft);
+  background: var(--app-surface-row-alt);
+}
+
+.modal-dup-tag-cell {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 0.35rem;
+  gap: 0.18rem;
   min-width: 0;
-  padding-left: 1rem;
-  border-left: 1px solid var(--app-border-strong);
+  padding: 0.32rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--app-border-soft);
+  background: var(--app-surface-input);
+}
+
+.modal-dup-tag-k {
+  color: var(--app-text-muted);
+  font-weight: 600;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.modal-dup-tag-v {
+  color: var(--app-text);
+  word-break: break-word;
+  font-family: ui-monospace, "Cascadia Code", "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.modal-dup-tags-empty {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  color: var(--app-text-dim);
+  font-style: italic;
+}
+
+.modal-dup-candidate-block {
+  margin-bottom: 0.35rem;
+}
+
+.modal-dup-candidate-hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  color: var(--app-text-muted);
+  font-style: italic;
+}
+
+.modal-dup-cell--action .btn-modal {
+  white-space: nowrap;
+  font-size: 0.92rem;
+  padding: 0.45rem 0.75rem;
 }
 
 .modal-dup-split .modal-dup-path-label {
@@ -3934,8 +4112,9 @@ table.table-resizable td:last-child {
 }
 
 .table-th-head-row .table-th-text {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  /* Firefox: min-width:0 ließ lange Überschriften (z. B. Rechterückruf) stärker kappen als Chrome. */
+  min-width: min(100%, max-content);
 }
 
 .table-filter-clear-col {

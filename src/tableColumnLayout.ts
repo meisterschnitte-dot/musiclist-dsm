@@ -22,6 +22,8 @@ export const TAG_COLUMN_MIN_WIDTHS: Record<keyof AudioTags, number> = (() => {
   for (const k of AUDIO_TAG_TABLE_COLUMN_KEYS) {
     o[k] = headerMinPx(AUDIO_TAG_FIELD_LABELS[k]);
   }
+  /* „Rechterückruf“: etwas großzügiger — vermeidet in Firefox stärkeres Abschneiden als in Chrome. */
+  o.gvlRechte = Math.max(o.gvlRechte, 124);
   return o;
 })();
 
@@ -78,7 +80,7 @@ export const GVL_COLUMN_MIN_WIDTHS: number[] = [
   headerMinPx("Kürzel"),
   headerMinPx("PLM"),
   headerMinPx("Hersteller"),
-  headerMinPx("Rechterückrufe"),
+  Math.max(headerMinPx("Rechterückrufe"), 150),
   headerMinPx("Übernehmen"),
   40,
 ];
@@ -88,6 +90,7 @@ export function defaultGvlColumnWidths(): number[] {
   w[1] = Math.max(w[1], 200);
   w[2] = Math.max(w[2], 72);
   w[3] = Math.max(w[3], 72);
+  w[5] = Math.max(w[5], 184);
   w[6] = Math.max(w[6], 92);
   w[7] = 52;
   return w;

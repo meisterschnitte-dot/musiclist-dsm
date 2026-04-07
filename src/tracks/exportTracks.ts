@@ -1,5 +1,7 @@
-import type { AudioTags } from "../audio/audioTags";
+import { mergeWarnungForDisplay, type AudioTags } from "../audio/audioTags";
 import { embedId3InMp3Blob } from "../audio/embedId3";
+import { readAudioTagsFromBlob } from "../audio/readId3Tags";
+import { apiSharedTracksReadBinary } from "../api/sharedTracksApi";
 import { titlesLikelySame } from "../edl/similarTitle";
 import type { PlaylistEntry } from "../edl/types";
 import { createFakeMp3Blob } from "./fakeMp3Blob";
@@ -44,13 +46,28 @@ export function deriveExportProjectFolderName(params: {
   return undefined;
 }
 
-export type DuplicatePrompt = {
-  playlistTitle: string;
-  proposedFileName: string;
+export type DuplicateCandidateKind = "exact" | "similar";
+
+/** Ein Treffer in der Musikdatenbank (exakter Dateiname oder ähnlicher Titel). */
+export type DuplicateCandidate = {
+  kind: DuplicateCandidateKind;
   existingFileName: string;
 };
 
-export type DuplicateChoice = "identical" | "different";
+export type DuplicatePrompt = {
+  playlistTitle: string;
+  proposedFileName: string;
+  /** Mindestens ein Eintrag — Reihenfolge: exakte Namen zuerst, dann ähnliche Titel. */
+  candidates: DuplicateCandidate[];
+  /** Geplante Tags für die neue Datei (wie beim Schreiben). */
+  proposedTags: AudioTags;
+  /** ID3 aus den Kandidaten-Dateien (Pfad wie in der Musikdatenbank). */
+  candidateTagsByPath: Record<string, AudioTags>;
+};
+
+export type DuplicateChoice =
+  | { action: "different" }
+  | { action: "identical"; existingFileName: string };
 
 /** Alle `.mp3`-Pfade relativ zum Speicherort-Root (rekursiv, Ordnerübergreifend). */
 async function listAllMp3RelativePathsUnderRoot(
@@ -72,26 +89,62 @@ async function listAllMp3RelativePathsUnderRoot(
 }
 
 /**
- * Konflikt mit **bereits vorhandenen** MP3s (typ. Musikdatenbank vor diesem Lauf).
- * Nur Basisname / ähnlicher Titel; kein Ordnerpfad. Nicht für frisch im gleichen Export erzeugte Dateien verwenden.
+ * Alle passenden bestehenden MP3s (Musikdatenbank vor diesem Lauf): zuerst exakt gleicher Basisname,
+ * dann ähnlicher Titel — ohne doppelte Pfade.
  */
-function findConflictingFile(
+function findConflictingFiles(
   proposedStem: string,
   proposedFileName: string,
   existingRelativePaths: string[]
-): { kind: "exact" | "similar"; existingFileName: string } | null {
-  const exact = existingRelativePaths.find(
-    (p) => basenamePath(p).toLowerCase() === proposedFileName.toLowerCase()
-  );
-  if (exact) return { kind: "exact", existingFileName: exact };
-
-  for (const rel of existingRelativePaths) {
-    const stem = stripExtension(basenamePath(rel));
-    if (titlesLikelySame(proposedStem, stem)) {
-      return { kind: "similar", existingFileName: rel };
+): DuplicateCandidate[] {
+  const out: DuplicateCandidate[] = [];
+  const seen = new Set<string>();
+  for (const p of existingRelativePaths) {
+    if (basenamePath(p).toLowerCase() === proposedFileName.toLowerCase()) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push({ kind: "exact", existingFileName: p });
+      }
     }
   }
-  return null;
+  for (const rel of existingRelativePaths) {
+    if (seen.has(rel)) continue;
+    const stem = stripExtension(basenamePath(rel));
+    if (titlesLikelySame(proposedStem, stem)) {
+      seen.add(rel);
+      out.push({ kind: "similar", existingFileName: rel });
+    }
+  }
+  return out;
+}
+
+async function readTagsFromSharedMp3Path(relativePath: string): Promise<AudioTags> {
+  try {
+    const ab = await apiSharedTracksReadBinary(relativePath);
+    const file = new File([ab], basenamePath(relativePath), { type: "audio/mpeg" });
+    return mergeWarnungForDisplay(await readAudioTagsFromBlob(file));
+  } catch {
+    return {};
+  }
+}
+
+async function readTagsFromLocalMp3Path(
+  rootDir: FileSystemDirectoryHandle,
+  relativePath: string
+): Promise<AudioTags> {
+  try {
+    const parts = relativePath.replace(/\\/g, "/").split("/").filter(Boolean);
+    if (parts.length === 0) return {};
+    let dir = rootDir;
+    for (let i = 0; i < parts.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(parts[i]!, { create: false });
+    }
+    const fh = await dir.getFileHandle(parts[parts.length - 1]!, { create: false });
+    const file = await fh.getFile();
+    return mergeWarnungForDisplay(await readAudioTagsFromBlob(file));
+  } catch {
+    return {};
+  }
 }
 
 async function fileExists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
@@ -191,20 +244,27 @@ export async function exportFakeTracksToTracksFolder(
       continue;
     }
 
-    const conflict = findConflictingFile(stem, proposedFileName, existingMp3Paths);
+    const conflicts = findConflictingFiles(stem, proposedFileName, existingMp3Paths);
 
     let storedRelativePath: string;
 
-    if (conflict) {
+    if (conflicts.length > 0) {
+      const proposedTags: AudioTags = getTagsForIndex?.(index) ? { ...getTagsForIndex(index)! } : {};
+      const candidateTagsByPath: Record<string, AudioTags> = {};
+      for (const c of conflicts) {
+        candidateTagsByPath[c.existingFileName] = await readTagsFromLocalMp3Path(tracksDir, c.existingFileName);
+      }
       const choice = await onDuplicate({
         playlistTitle: row.title,
         proposedFileName,
-        existingFileName: conflict.existingFileName,
+        candidates: conflicts,
+        proposedTags,
+        candidateTagsByPath,
       });
 
-      if (choice === "identical") {
+      if (choice.action === "identical") {
         /** Bereits relativ zum Speicherort-Root — kein Projekt-Präfix (kann anderer Ordner sein). */
-        storedRelativePath = conflict.existingFileName;
+        storedRelativePath = choice.existingFileName;
         identicalChoiceIndices.push(index);
       } else {
         const newBasename = await nextFreeMp3Name(targetDir, stem, usedBasenamesLower);
@@ -307,19 +367,26 @@ export async function exportFakeTracksToSharedStorage(
       continue;
     }
 
-    const conflict = findConflictingFile(stem, proposedFileName, existingMp3Paths);
+    const conflicts = findConflictingFiles(stem, proposedFileName, existingMp3Paths);
 
     let storedRelativePath: string;
 
-    if (conflict) {
+    if (conflicts.length > 0) {
+      const proposedTags: AudioTags = getTagsForIndex?.(index) ? { ...getTagsForIndex(index)! } : {};
+      const candidateTagsByPath: Record<string, AudioTags> = {};
+      for (const c of conflicts) {
+        candidateTagsByPath[c.existingFileName] = await readTagsFromSharedMp3Path(c.existingFileName);
+      }
       const choice = await onDuplicate({
         playlistTitle: row.title,
         proposedFileName,
-        existingFileName: conflict.existingFileName,
+        candidates: conflicts,
+        proposedTags,
+        candidateTagsByPath,
       });
 
-      if (choice === "identical") {
-        storedRelativePath = conflict.existingFileName;
+      if (choice.action === "identical") {
+        storedRelativePath = choice.existingFileName;
         identicalChoiceIndices.push(index);
       } else {
         const newBasename = await nextFreeMp3NameShared(

@@ -295,7 +295,7 @@ export function SystemSettingsModal({
               <table className="table-dense table-resizable sys-settings-table">
                 <colgroup ref={gvlColGroupRef}>
                   {gvlColWidths.map((w, i) => (
-                    <col key={i} style={{ width: w, minWidth: 0 }} />
+                    <col key={i} style={{ width: w, minWidth: gvlResizeMinForIndex(i) }} />
                   ))}
                 </colgroup>
                 <thead>

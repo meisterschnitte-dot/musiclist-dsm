@@ -437,6 +437,45 @@ function splitPathForDupModal(raw: string): { dir: string; base: string } {
   return { dir: t.slice(0, i + 1), base: t.slice(i + 1) };
 }
 
+/** Nur Song/Komponist/GVL — nebeneinander im Duplikat-Dialog; Jahr/Kommentar/ISRC u. a. weglassen. */
+const DUP_MODAL_TAG_KEYS: (keyof AudioTags)[] = [
+  "songTitle",
+  "artist",
+  "album",
+  "composer",
+  "labelcode",
+  "label",
+  "hersteller",
+  "gvlRechte",
+];
+
+function DupModalTagPreview({ tags }: { tags: AudioTags }) {
+  const cells: { key: string; label: string; value: string }[] = [];
+  for (const k of DUP_MODAL_TAG_KEYS) {
+    const v = tags[k];
+    const t = typeof v === "string" ? v.trim() : "";
+    if (!t) continue;
+    cells.push({ key: k, label: AUDIO_TAG_FIELD_LABELS[k], value: t });
+  }
+  if (cells.length === 0) {
+    return (
+      <p className="modal-dup-tags-empty">
+        Keine Angaben zu Songtitel, Interpret, Album, Komponist oder GVL (oder nicht lesbar).
+      </p>
+    );
+  }
+  return (
+    <div className="modal-dup-tags modal-dup-tags--row">
+      {cells.map(({ key, label, value }) => (
+        <div key={key} className="modal-dup-tag-cell">
+          <span className="modal-dup-tag-k">{label}</span>
+          <span className="modal-dup-tag-v">{value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type TagsCtxMenuState =
   | null
   | {
@@ -630,8 +669,8 @@ export default function App() {
   const [drag, setDrag] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [dupModal, setDupModal] = useState<DupModalState | null>(null);
-  /** Testumgebung: nach erstem Dialog dieselbe Entscheidung für alle weiteren Konflikte. */
-  const dupApplyAllRef = useRef<DuplicateChoice | null>(null);
+  /** Testumgebung: nach erstem Dialog dieselbe Entscheidung für alle weiteren Konflikte (Pfad jeweils = erster Treffer). */
+  const dupApplyAllRef = useRef<"identical" | "different" | null>(null);
   const [dupApplyAllChecked, setDupApplyAllChecked] = useState(false);
   /** Rückfrage vor erneutem Transfer, wenn bereits eine `.list`/`.egpl` aktiv ist. */
   const [transferListConfirmOpen, setTransferListConfirmOpen] = useState(false);
@@ -1435,8 +1474,14 @@ export default function App() {
 
   const askDuplicate = useCallback((info: DuplicatePrompt) => {
     const preset = dupApplyAllRef.current;
-    if (preset !== null) {
-      return Promise.resolve(preset);
+    if (preset !== null && info.candidates.length > 0) {
+      if (preset === "identical") {
+        return Promise.resolve({
+          action: "identical" as const,
+          existingFileName: info.candidates[0].existingFileName,
+        });
+      }
+      return Promise.resolve({ action: "different" as const });
     }
     return new Promise<DuplicateChoice>((resolve) => {
       setDupModal({ ...info, resolve });
@@ -1445,12 +1490,6 @@ export default function App() {
 
   useEffect(() => {
     if (dupModal) setDupApplyAllChecked(false);
-  }, [dupModal]);
-
-  /** Nur Pfad der bestehenden DB-Datei; der neue Eintrag hat noch keinen Speicherort. */
-  const dupModalDbPathSplit = useMemo(() => {
-    if (!dupModal) return null;
-    return splitPathForDupModal(dupModal.existingFileName);
   }, [dupModal]);
 
   useEffect(() => {
@@ -1472,7 +1511,7 @@ export default function App() {
 
   const resolveDuplicate = useCallback((choice: DuplicateChoice) => {
     if (dupApplyAllCheckedRef.current) {
-      dupApplyAllRef.current = choice;
+      dupApplyAllRef.current = choice.action === "identical" ? "identical" : "different";
     }
     setDupModal((m) => {
       if (m) m.resolve(choice);
@@ -3824,13 +3863,15 @@ export default function App() {
                           <colgroup ref={edlColGroupRef}>
                             {edlDisplayWidthsArr.map((w, i) => {
                               const last = i === edlDisplayWidthsArr.length - 1;
+                              const colId = edlDisplayColumnIds[i]!;
+                              const minW = edlResizeMinForColumnId(colId);
                               return (
                                 <col
-                                  key={edlDisplayColumnIds[i]}
+                                  key={colId}
                                   style={
                                     last
                                       ? { width: "auto", minWidth: w }
-                                      : { width: w, minWidth: 0 }
+                                      : { width: w, minWidth: minW }
                                   }
                                 />
                               );
@@ -4299,13 +4340,15 @@ export default function App() {
                     <colgroup ref={mp3ColGroupRef}>
                       {mp3VisibleWidthsArr.map((w, i) => {
                         const last = i === mp3VisibleWidthsArr.length - 1;
+                        const colId = mp3VisibleColumnIds[i]!;
+                        const minW = mp3ResizeMinForColumnId(colId);
                         return (
                           <col
-                            key={mp3VisibleColumnIds[i]}
+                            key={colId}
                             style={
                               last
                                 ? { width: "auto", minWidth: w }
-                                : { width: w, minWidth: 0 }
+                                : { width: w, minWidth: minW }
                             }
                           />
                         );
@@ -5138,57 +5181,91 @@ export default function App() {
 
       {dupModal && (
         <div
-          className="modal-backdrop"
+          className="modal-backdrop modal-backdrop--dup-wide"
           role="dialog"
           aria-modal="true"
           aria-labelledby="dup-modal-title"
         >
           <div className="modal modal--dup">
-            <h2 id="dup-modal-title" className="modal-title">
-              Datensatz möglicherweise vorhanden
-            </h2>
-            <p className="modal-lead modal-lead--dup">
-              Es existiert bereits eine MP3 mit gleichem oder sehr ähnlichem Namen. Sind das dieselben
-              Titel?
-            </p>
+            <header className="modal-dup-header">
+              <h2 id="dup-modal-title" className="modal-title">
+                Datensatz möglicherweise vorhanden
+              </h2>
+              <span className="modal-dup-header-question" role="note">
+                Sind das dieselben Titel?
+              </span>
+              <p className="modal-lead modal-lead--dup-inline">
+                Es existiert bereits eine MP3 mit gleichem oder sehr ähnlichem Namen.
+              </p>
+            </header>
             <div className="modal-dup-scroll">
               <div className="modal-compare modal-compare--dup modal-dup-split">
-                {dupModalDbPathSplit && dupModal && (
-                  <>
-                    <div className="modal-dup-row">
-                      <div className="modal-dup-folder-block">
-                        <span className="modal-label modal-dup-path-label">Listeneintrag (Ordner)</span>
+                <div className="modal-dup-candidate-block modal-dup-candidate-block--new">
+                  <p className="modal-dup-candidate-hint">Neuer / geplanter Dateiname</p>
+                  <div className="modal-dup-grid modal-dup-grid--inline">
+                    <div className="modal-dup-pathfile-col">
+                      <span className="modal-label modal-dup-path-label">Ordner und Dateiname</span>
+                      <div className="modal-dup-path-filename-line">
                         <span
                           className="modal-dup-dir modal-dup-dir--empty"
                           title="Noch kein Speicherort — die MP3 entsteht erst beim Transfer."
                         >
                           —
                         </span>
-                      </div>
-                      <div className="modal-dup-name-block">
-                        <span className="modal-label modal-dup-path-label">Dateiname (neu)</span>
                         <span className="modal-dup-filename">{dupModal.proposedFileName}</span>
                       </div>
                     </div>
-                    <div className="modal-dup-row">
-                      <div className="modal-dup-folder-block">
-                        <span className="modal-label modal-dup-path-label">Musikdatenbank (Ordner)</span>
-                        <span
-                          className="modal-dup-dir"
-                          title={dupModalDbPathSplit.dir.trim() ? dupModalDbPathSplit.dir : undefined}
-                        >
-                          {dupModalDbPathSplit.dir.trim() ? dupModalDbPathSplit.dir : "—"}
-                        </span>
+                    <div className="modal-dup-cell modal-dup-cell--action modal-dup-cell--action-spacer" />
+                  </div>
+                  <p className="modal-dup-tags-caption">Tags (wie für die neue Datei vorgesehen)</p>
+                  <DupModalTagPreview tags={dupModal.proposedTags} />
+                </div>
+
+                <p className="modal-dup-section-title modal-dup-hits-title">Treffer in der Musikdatenbank</p>
+                {dupModal.candidates.map((c) => {
+                  const sp = splitPathForDupModal(c.existingFileName);
+                  return (
+                    <div className="modal-dup-candidate-block" key={c.existingFileName}>
+                      <p className="modal-dup-candidate-hint">
+                        {c.kind === "exact"
+                          ? "Exakter Dateiname"
+                          : "Vermutlich gleicher Titel (ähnlicher Dateiname)"}
+                      </p>
+                      <div className="modal-dup-grid modal-dup-grid--inline">
+                        <div className="modal-dup-pathfile-col">
+                          <span className="modal-label modal-dup-path-label">Ordner und Dateiname</span>
+                          <div className="modal-dup-path-filename-line">
+                            <span
+                              className="modal-dup-dir"
+                              title={sp.dir.trim() ? sp.dir : undefined}
+                            >
+                              {sp.dir.trim() ? sp.dir : "—"}
+                            </span>
+                            <span className="modal-dup-filename">
+                              {sp.base || basenamePath(c.existingFileName)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="modal-dup-cell modal-dup-cell--action">
+                          <button
+                            type="button"
+                            className="btn-modal primary"
+                            onClick={() =>
+                              resolveDuplicate({
+                                action: "identical",
+                                existingFileName: c.existingFileName,
+                              })
+                            }
+                          >
+                            Ist identisch
+                          </button>
+                        </div>
                       </div>
-                      <div className="modal-dup-name-block">
-                        <span className="modal-label modal-dup-path-label">Dateiname (Musikdatenbank)</span>
-                        <span className="modal-dup-filename">
-                          {dupModalDbPathSplit.base || basenamePath(dupModal.existingFileName)}
-                        </span>
-                      </div>
+                      <p className="modal-dup-tags-caption">Tags in dieser Datei</p>
+                      <DupModalTagPreview tags={dupModal.candidateTagsByPath[c.existingFileName] ?? {}} />
                     </div>
-                  </>
-                )}
+                  );
+                })}
               </div>
               <label className="dup-apply-all">
                 <input
@@ -5203,12 +5280,9 @@ export default function App() {
             <div className="modal-actions modal-actions--dup">
               <button
                 type="button"
-                className="btn-modal primary"
-                onClick={() => resolveDuplicate("identical")}
+                className="btn-modal"
+                onClick={() => resolveDuplicate({ action: "different" })}
               >
-                Ist identisch
-              </button>
-              <button type="button" className="btn-modal" onClick={() => resolveDuplicate("different")}>
                 Ist nicht identisch
               </button>
             </div>
