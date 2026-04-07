@@ -7,6 +7,8 @@ import {
   type CustomerEmailGroup,
   type CustomerRecord,
 } from "../api/customersApi";
+import { fetchUsersList } from "../api/usersApi";
+import { normalizeUserEmail, type AppUserRecord } from "../storage/appUsersStorage";
 
 type Props = {
   open: boolean;
@@ -40,6 +42,16 @@ export function CustomersModal({ open, onClose }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   /** Im Bearbeitungsformular: welche Gruppe im Dropdown aktiv ist. */
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [appUsers, setAppUsers] = useState<AppUserRecord[]>([]);
+  const [userPicker, setUserPicker] = useState("");
+
+  const sortedAppUsers = useMemo(() => {
+    return [...appUsers].sort((a, b) => {
+      const an = `${a.lastName} ${a.firstName} ${a.email}`.toLowerCase();
+      const bn = `${b.lastName} ${b.firstName} ${b.email}`.toLowerCase();
+      return an.localeCompare(bn, "de");
+    });
+  }, [appUsers]);
 
   const reload = useCallback(async () => {
     const rows = await fetchCustomersList();
@@ -50,6 +62,7 @@ export function CustomersModal({ open, onClose }: Props) {
     if (!open) return;
     setErr(null);
     setBusy(true);
+    setUserPicker("");
     void fetchCustomersList()
       .then((rows) => {
         setList(rows);
@@ -60,6 +73,9 @@ export function CustomersModal({ open, onClose }: Props) {
       })
       .catch((e) => setErr(e instanceof Error ? e.message : "Kunden konnten nicht geladen werden."))
       .finally(() => setBusy(false));
+    void fetchUsersList()
+      .then((users) => setAppUsers(users))
+      .catch(() => setAppUsers([]));
   }, [open]);
 
   const startNew = useCallback(() => {
@@ -68,6 +84,7 @@ export function CustomersModal({ open, onClose }: Props) {
     setEmailsText("");
     setEditingId("new");
     setSelectedGroupId(null);
+    setUserPicker("");
   }, []);
 
   const startEdit = useCallback((c: CustomerRecord) => {
@@ -77,6 +94,7 @@ export function CustomersModal({ open, onClose }: Props) {
     setEmailsText(c.emails.join("\n"));
     setEditingId(c.id);
     setSelectedGroupId(groups[0]?.id ?? null);
+    setUserPicker("");
   }, []);
 
   const cancelEdit = useCallback(() => {
@@ -84,6 +102,7 @@ export function CustomersModal({ open, onClose }: Props) {
     setEmailsText("");
     setEditingId(null);
     setSelectedGroupId(null);
+    setUserPicker("");
     setErr(null);
   }, []);
 
@@ -365,6 +384,42 @@ export function CustomersModal({ open, onClose }: Props) {
                       autoComplete="off"
                       placeholder={"optional:\nkontakt@beispiel.de\ninfo@beispiel.de"}
                     />
+                  </label>
+
+                  <label className="tag-field customers-field">
+                    <span>Benutzer aus Liste hinzufügen</span>
+                    <span className="customers-field-hint">
+                      Wählt eine Person aus der zentralen Benutzerliste — die E-Mail wird zur Liste oben
+                      ergänzt (ohne Duplikate).
+                    </span>
+                    <select
+                      className="customers-group-select"
+                      value={userPicker}
+                      disabled={busy}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setUserPicker("");
+                        if (!id) return;
+                        const u = appUsers.find((x) => x.id === id);
+                        if (!u) return;
+                        const em = normalizeUserEmail(u.email);
+                        const current = parseEmailsBlock(emailsText);
+                        if (current.includes(em)) return;
+                        setEmailsText(emailsText.trim() ? `${emailsText.trim()}\n${em}` : em);
+                      }}
+                      aria-label="E-Mail eines Benutzers zur Kundenliste hinzufügen"
+                    >
+                      <option value="">— Benutzer wählen —</option>
+                      {sortedAppUsers.map((u) => {
+                        const label =
+                          `${u.firstName} ${u.lastName}`.trim() || u.email;
+                        return (
+                          <option key={u.id} value={u.id}>
+                            {label} · {u.email}
+                          </option>
+                        );
+                      })}
+                    </select>
                   </label>
 
                   <div className="customers-groups-section">

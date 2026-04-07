@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchCustomersList } from "../api/customersApi";
+import { fetchCustomersList, type CustomerRecord } from "../api/customersApi";
 import { sendUserInvite } from "../api/sendUserInvite";
 import {
   deleteUserRequest,
@@ -44,7 +44,11 @@ export function UserManagementModal({
   const [newEmail, setNewEmail] = useState("");
   const [newRole, setNewRole] = useState<UserRole>("user");
   const [newCompany, setNewCompany] = useState("");
-  const [customerNames, setCustomerNames] = useState<string[]>([]);
+  /** "" | Kunden-ID | "__new__" = neuer Firmenname (Freitext) */
+  const [newCustomerPick, setNewCustomerPick] = useState<string>("");
+  const [customersList, setCustomersList] = useState<CustomerRecord[]>([]);
+  /** Bearbeiten: gleiche Logik wie newCustomerPick */
+  const [editCustomerPick, setEditCustomerPick] = useState<string>("");
 
   const [editingUser, setEditingUser] = useState<AppUserRecord | null>(null);
   const [editFirst, setEditFirst] = useState("");
@@ -57,13 +61,25 @@ export function UserManagementModal({
   useEffect(() => {
     if (!open) return;
     void fetchCustomersList()
-      .then((rows) => setCustomerNames(rows.map((c) => c.name).sort((a, b) => a.localeCompare(b, "de"))))
-      .catch(() => setCustomerNames([]));
+      .then((rows) =>
+        setCustomersList([...rows].sort((a, b) => a.name.localeCompare(b.name, "de")))
+      )
+      .catch(() => setCustomersList([]));
   }, [open]);
 
   useEffect(() => {
-    if (!open) setEditingUser(null);
+    if (!open) {
+      setEditingUser(null);
+      setNewCustomerPick("");
+    }
   }, [open]);
+
+  useEffect(() => {
+    if (newRole !== "customer") {
+      setNewCompany("");
+      setNewCustomerPick("");
+    }
+  }, [newRole]);
 
   useEffect(() => {
     if (!editingUser) return;
@@ -75,7 +91,57 @@ export function UserManagementModal({
     setEditActive(isUserRecordActive(editingUser));
   }, [editingUser]);
 
+  /** Kunden-Dropdown an customerId / Firmennamen koppeln (nach Laden der Kundenliste). */
+  useEffect(() => {
+    if (!editingUser) {
+      setEditCustomerPick("");
+      return;
+    }
+    const cm = (editingUser.companyName ?? "").trim();
+    if (editingUser.customerId) {
+      const byId = customersList.find((c) => c.id === editingUser.customerId);
+      if (byId) {
+        setEditCustomerPick(byId.id);
+        return;
+      }
+    }
+    if (cm) {
+      const byName = customersList.find(
+        (c) => c.name.trim().toLowerCase() === cm.toLowerCase()
+      );
+      setEditCustomerPick(byName ? byName.id : "__new__");
+    } else {
+      setEditCustomerPick("");
+    }
+  }, [editingUser, customersList]);
+
   const companyDatalistId = useMemo(() => "user-mgmt-company-datalist", []);
+
+  const onNewCustomerPickChange = useCallback(
+    (value: string) => {
+      setNewCustomerPick(value);
+      if (value && value !== "__new__") {
+        const c = customersList.find((x) => x.id === value);
+        if (c) setNewCompany(c.name);
+      } else if (value === "__new__") {
+        setNewCompany("");
+      }
+    },
+    [customersList]
+  );
+
+  const onEditCustomerPickChange = useCallback(
+    (value: string) => {
+      setEditCustomerPick(value);
+      if (value && value !== "__new__") {
+        const c = customersList.find((x) => x.id === value);
+        if (c) setEditCompany(c.name);
+      } else if (value === "__new__") {
+        setEditCompany("");
+      }
+    },
+    [customersList]
+  );
 
   const reloadList = useCallback(async () => {
     const list = await fetchUsersList();
@@ -102,6 +168,12 @@ export function UserManagementModal({
       setErr("Diese E-Mail ist bereits registriert.");
       return;
     }
+    if (roleForInvite === "customer" && !company) {
+      setErr(
+        "Für die Rolle „Kunde“ ist ein Firmenname erforderlich — bestehenden Kunden wählen oder neu eintragen."
+      );
+      return;
+    }
     setBusy(true);
     try {
       await inviteUserRequest({
@@ -109,7 +181,7 @@ export function UserManagementModal({
         lastName: ln,
         email: em,
         role: roleForInvite,
-        ...(roleForInvite === "customer" && company ? { companyName: company } : {}),
+        ...(roleForInvite === "customer" ? { companyName: company } : {}),
       });
       await reloadList();
       setNewFirst("");
@@ -117,6 +189,7 @@ export function UserManagementModal({
       setNewEmail("");
       setNewRole("user");
       setNewCompany("");
+      setNewCustomerPick("");
 
       const roleLabel =
         roleForInvite === "admin"
@@ -221,6 +294,12 @@ export function UserManagementModal({
       countActiveAdmins(users) <= 1
     ) {
       setErr("Der letzte aktive Administrator kann die Rolle nicht ändern.");
+      return;
+    }
+    if (editRole === "customer" && !company) {
+      setErr(
+        "Für die Rolle „Kunde“ ist ein Firmenname erforderlich — bestehenden Kunden wählen oder neu eintragen."
+      );
       return;
     }
     setBusy(true);
@@ -440,7 +519,14 @@ export function UserManagementModal({
                 <span>Rolle</span>
                 <select
                   value={editRole}
-                  onChange={(e) => setEditRole(e.target.value as UserRole)}
+                  onChange={(e) => {
+                    const r = e.target.value as UserRole;
+                    setEditRole(r);
+                    if (r !== "customer") {
+                      setEditCompany("");
+                      setEditCustomerPick("");
+                    }
+                  }}
                   className="user-mgmt-select"
                 >
                   <option value="user">Benutzer</option>
@@ -449,17 +535,51 @@ export function UserManagementModal({
                 </select>
               </label>
               {editRole === "customer" && (
-                <label className="tag-field">
-                  <span>Firmenname (optional)</span>
-                  <input
-                    type="text"
-                    value={editCompany}
-                    onChange={(e) => setEditCompany(e.target.value)}
-                    list={companyDatalistId}
-                    autoComplete="off"
-                    placeholder="Aus Kundenverwaltung oder neu …"
-                  />
-                </label>
+                <>
+                  <label className="tag-field">
+                    <span>Kunde (Firma)</span>
+                    <span className="customers-field-hint">
+                      Bestehenden Kunden wählen oder „Neu …“ und Firmennamen eintragen — neue Firmen erscheinen
+                      danach in der Kundenverwaltung.
+                    </span>
+                    <select
+                      className="user-mgmt-select"
+                      value={editCustomerPick}
+                      onChange={(e) => onEditCustomerPickChange(e.target.value)}
+                    >
+                      <option value="">— Kunde wählen oder neu —</option>
+                      {customersList.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                      <option value="__new__">Neuen Kunden anlegen (Firmenname unten) …</option>
+                    </select>
+                  </label>
+                  <label className="tag-field">
+                    <span>Firmenname</span>
+                    <input
+                      type="text"
+                      value={editCompany}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setEditCompany(v);
+                        const t = v.trim();
+                        if (!t) {
+                          setEditCustomerPick("");
+                          return;
+                        }
+                        const byName = customersList.find(
+                          (c) => c.name.trim().toLowerCase() === t.toLowerCase()
+                        );
+                        setEditCustomerPick(byName ? byName.id : "__new__");
+                      }}
+                      list={companyDatalistId}
+                      autoComplete="off"
+                      placeholder="z. B. Produktionsfirma XY"
+                    />
+                  </label>
+                </>
               )}
               <label className="tag-field user-mgmt-active-field">
                 <span>Konto aktiv</span>
@@ -530,7 +650,14 @@ export function UserManagementModal({
             <span>Rolle</span>
             <select
               value={newRole}
-              onChange={(e) => setNewRole(e.target.value as UserRole)}
+              onChange={(e) => {
+                const r = e.target.value as UserRole;
+                setNewRole(r);
+                if (r !== "customer") {
+                  setNewCompany("");
+                  setNewCustomerPick("");
+                }
+              }}
               className="user-mgmt-select"
             >
               <option value="user">Benutzer</option>
@@ -539,23 +666,57 @@ export function UserManagementModal({
             </select>
           </label>
           {newRole === "customer" && (
-            <label className="tag-field">
-              <span>Firmenname (optional)</span>
-              <input
-                type="text"
-                value={newCompany}
-                onChange={(e) => setNewCompany(e.target.value)}
-                list={companyDatalistId}
-                autoComplete="off"
-                placeholder="Aus Kundenverwaltung oder neu …"
-              />
-              <datalist id={companyDatalistId}>
-                {customerNames.map((n) => (
-                  <option key={n} value={n} />
-                ))}
-              </datalist>
-            </label>
+            <>
+              <label className="tag-field">
+                <span>Kunde (Firma)</span>
+                <span className="customers-field-hint">
+                  Bestehenden Kunden wählen oder „Neu …“ und Firmennamen eintragen — neue Firmen erscheinen
+                  danach in der Kundenverwaltung.
+                </span>
+                <select
+                  className="user-mgmt-select"
+                  value={newCustomerPick}
+                  onChange={(e) => onNewCustomerPickChange(e.target.value)}
+                >
+                  <option value="">— Kunde wählen oder neu —</option>
+                  {customersList.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                  <option value="__new__">Neuen Kunden anlegen (Firmenname unten) …</option>
+                </select>
+              </label>
+              <label className="tag-field">
+                <span>Firmenname</span>
+                <input
+                  type="text"
+                  value={newCompany}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setNewCompany(v);
+                    const t = v.trim();
+                    if (!t) {
+                      setNewCustomerPick("");
+                      return;
+                    }
+                    const byName = customersList.find(
+                      (c) => c.name.trim().toLowerCase() === t.toLowerCase()
+                    );
+                    setNewCustomerPick(byName ? byName.id : "__new__");
+                  }}
+                  list={companyDatalistId}
+                  autoComplete="off"
+                  placeholder="z. B. Produktionsfirma XY"
+                />
+              </label>
+            </>
           )}
+          <datalist id={companyDatalistId}>
+            {customersList.map((c) => (
+              <option key={c.id} value={c.name} />
+            ))}
+          </datalist>
           <button
             type="button"
             className="btn-modal primary"
