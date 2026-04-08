@@ -1,13 +1,12 @@
-import { GlobalWorkerOptions, getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 /**
- * Expliziter ?url-Import: Vite legt die Worker-Datei als Asset ab und liefert die finale URL.
- * `new URL("pdfjs-dist/...", import.meta.url)` kann im Produktionsbundle in Firefox beim
- * dynamischen Laden des Workers fehlschlagen („Setting up fake worker failed“).
+ * pdf.worker als Modul mitladen: setzt `globalThis.pdfjsWorker` (WorkerMessageHandler).
+ * PDF.js nutzt dann die Ausführung im Hauptthread statt eines separaten Worker-Fetches —
+ * vermeidet „Failed to fetch …/pdf.worker-….mjs“ (Deployment/CSP/MIME) und Firefox-Probleme
+ * beim dynamischen Import des Worker-Assets.
  */
-import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
+import "pdfjs-dist/legacy/build/pdf.worker.mjs";
 import type { GvlLabelEntry } from "../storage/gvlLabelStore";
-
-GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 type TextItem = {
   str: string;
