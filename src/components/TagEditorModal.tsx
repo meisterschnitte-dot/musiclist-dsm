@@ -32,6 +32,15 @@ import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniver
 import { openSonotonSearchWithOptionalClip, SONOTON_SEARCH_BASE_URL } from "../sonotonSearch";
 import { openEarmotionSearchWithOptionalClip, EARMOTION_ACCOUNT_URL } from "../earmotionSearch";
 import {
+  apiBlankframeTracksFetch,
+  mapBlankframeTrackToAudioTagsPartial,
+} from "../api/blankframeApi";
+import {
+  extractBlankframeCatalogIds,
+  labelcodeWithLcPrefix,
+  openBlankframeSearchWithOptionalClip,
+} from "../blankframeSearch";
+import {
   looksLikeBmgPmMetadata,
   parseBmgPmMetadataText,
 } from "../audio/parseBmgPmMetadataText";
@@ -47,6 +56,10 @@ import {
   looksLikeAppleMusicCreditsText,
   parseAppleMusicCreditsText,
 } from "../audio/parseAppleMusicCreditsText";
+import {
+  looksLikeBlankframeMetadata,
+  parseBlankframeMetadataText,
+} from "../audio/parseBlankframeMetadataText";
 
 type TagFormFields = Record<Exclude<keyof AudioTags, "warnung">, string>;
 
@@ -155,6 +168,8 @@ export function TagEditorModal({
   const [filenameCtx, setFilenameCtx] = useState<
     null | { x: number; y: number; selectionText: string }
   >(null);
+  const [blankframeApiBusy, setBlankframeApiBusy] = useState(false);
+  const [blankframeApiErr, setBlankframeApiErr] = useState<string | null>(null);
 
   const applyFilenameSelectionToField = useCallback(
     (field: (typeof FILENAME_TARGET_FIELDS)[number]["key"], text: string) => {
@@ -187,6 +202,7 @@ export function TagEditorModal({
     setSaveBusy(false);
     setPasteDraft("");
     setOverwriteParsed(true);
+    setBlankframeApiErr(null);
   }, [open, initial, multiTrack]);
 
   useEffect(() => {
@@ -194,7 +210,7 @@ export function TagEditorModal({
     const { entry } = gvlApplyFromDb;
     setForm((prev) => ({
       ...prev,
-      labelcode: entry.labelcode,
+      labelcode: labelcodeWithLcPrefix(entry.labelcode),
       label: entry.label,
       hersteller: entry.hersteller,
       gvlRechte: entry.rechterueckrufe,
@@ -268,7 +284,9 @@ export function TagEditorModal({
           ? parseSonotonMetadataText(pasteDraft)
           : looksLikeEarmotionMetadata(pasteDraft)
             ? parseEarmotionMetadataText(pasteDraft)
-            : parseGemaOcrText(pasteDraft);
+            : looksLikeBlankframeMetadata(pasteDraft)
+              ? parseBlankframeMetadataText(pasteDraft)
+              : parseGemaOcrText(pasteDraft);
     let mergedFields: Partial<AudioTags> = { ...fields };
     const lc = mergedFields.labelcode?.trim();
     if (lc) {
@@ -305,6 +323,53 @@ export function TagEditorModal({
       return next;
     });
   };
+
+  const onBlankframeSearchClick = useCallback(async () => {
+    setBlankframeApiErr(null);
+    const src = p7SearchSource?.trim();
+    const ids = extractBlankframeCatalogIds(src);
+    if (ids.length === 0) {
+      openBlankframeSearchWithOptionalClip(p7SearchSource);
+      return;
+    }
+    setBlankframeApiBusy(true);
+    try {
+      const tracks = await apiBlankframeTracksFetch(ids.join(","));
+      if (tracks.length === 0) {
+        setBlankframeApiErr("Blankframe lieferte keine Tracks.");
+        return;
+      }
+      const want = ids[0]!;
+      const track =
+        tracks.find((t) => (t.catalogTrackNumber ?? "").toLowerCase() === want.toLowerCase()) ??
+        tracks[0]!;
+      const partial = mapBlankframeTrackToAudioTagsPartial(track);
+      setForm((prev) => {
+        const next = { ...prev };
+        for (const k of Object.keys(partial) as (keyof typeof partial)[]) {
+          if (k === "warnung") continue;
+          const v = partial[k as keyof typeof partial];
+          if (typeof v !== "string" || !v.trim()) continue;
+          (next as Record<string, string>)[k] = v.trim();
+        }
+        const lc = next.labelcode?.trim();
+        if (lc) {
+          const db = gvlLabelDb ?? loadGvlLabelDb();
+          const entry = findGvlEntryByLabelcode(db, lc);
+          if (entry) {
+            next.label = entry.label;
+            next.hersteller = entry.hersteller;
+            next.gvlRechte = entry.rechterueckrufe;
+          }
+        }
+        return next;
+      });
+    } catch (e) {
+      setBlankframeApiErr(e instanceof Error ? e.message : "Blankframe-API fehlgeschlagen.");
+    } finally {
+      setBlankframeApiBusy(false);
+    }
+  }, [p7SearchSource, gvlLabelDb]);
 
   const setStandard = useCallback(
     (key: keyof TagFormFields) =>
@@ -399,16 +464,18 @@ export function TagEditorModal({
         {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
-            Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Earmotion
+            Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Earmotion / Blankframe
           </div>
           <textarea
             className="tag-import-textarea"
             value={pasteDraft}
             onChange={(e) => setPasteDraft(e.target.value)}
-            placeholder={"TITEL …\nCD …\nJAHR …"}
+            placeholder={
+              "TITEL …\nCD …\nJAHR …\n\nBlankframe z. B.:\nDystopia = Songtitel\n\nSpheric Pulses = Albumtitel"
+            }
             rows={5}
             spellCheck={false}
-            aria-label="Eingefügter GEMA- oder Lens-Text"
+            aria-label="Eingefügter Metadaten-Text (GEMA, Lens, Blankframe, …)"
           />
           <label className="tag-import-overwrite">
             <input
@@ -550,6 +617,24 @@ export function TagEditorModal({
             >
               Earmotion-Suche
             </button>
+            <button
+              type="button"
+              className="btn-modal"
+              disabled={blankframeApiBusy}
+              title={
+                `API track/get/many — Wenn der Dateiname eine Katalognummer enthält (z. B. blkfr_0206-3), ` +
+                `werden Metadaten geladen und Labelcode LC 95281 mit GVL ergänzt. ` +
+                `Ohne Katalognummer: Website öffnen, Zwischenablage wie bisher (Songtitel-Segment).`
+              }
+              onClick={() => void onBlankframeSearchClick()}
+            >
+              {blankframeApiBusy ? "Blankframe …" : "Blankframe-Suche"}
+            </button>
+            {blankframeApiErr ? (
+              <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
+                {blankframeApiErr}
+              </p>
+            ) : null}
             {showGvlDatabaseButton ? (
               <button
                 type="button"

@@ -11,13 +11,6 @@ function htmlMailToPlainText(html: string): string {
   return (d.innerText || d.textContent || "").trim();
 }
 
-/** Wird angehängt, wenn die Liste dem Kunden zugewiesen wird (ergänzt die Standard-Mail, Login-Hinweis steht dort bereits). */
-const PLAYLIST_ASSIGN_HINT_PLAIN = `
-
-Hinweis: Nach diesem Versand wird die Liste diesem Kunden in Musiclist zugewiesen und erscheint im Konto automatisch. Alle für diesen Kunden hinterlegten E-Mail-Adressen können dieselbe Liste dort einsehen.`;
-
-const PLAYLIST_ASSIGN_HINT_HTML = `<br><br><p><strong>Hinweis:</strong> Nach diesem Versand wird die Liste diesem Kunden in Musiclist zugewiesen und erscheint im Konto automatisch. Alle für diesen Kunden hinterlegten E-Mail-Adressen können dieselbe Liste dort einsehen.</p>`;
-
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -138,21 +131,11 @@ export function PlaylistMailModal({
     }
     setBusy(true);
     try {
-      const withAssignment = Boolean(mailAssignment && customerId.trim());
       const hadHtml = /<[^>]+>/.test(body);
       let text: string;
       let html: string | undefined;
-      if (withAssignment) {
-        if (hadHtml) {
-          html = body + PLAYLIST_ASSIGN_HINT_HTML;
-          text = htmlMailToPlainText(html);
-        } else {
-          text = body + PLAYLIST_ASSIGN_HINT_PLAIN;
-        }
-      } else {
-        text = hadHtml ? htmlMailToPlainText(body) : body;
-        if (hadHtml) html = body;
-      }
+      text = hadHtml ? htmlMailToPlainText(body) : body;
+      if (hadHtml) html = body;
       await sendPlaylistMailRequest({
         to,
         subject: subject.trim(),

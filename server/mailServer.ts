@@ -20,6 +20,7 @@ import {
 import { removePlaylistPendingForRef } from "./customerPlaylistPendingFs";
 import { createCustomersRouter } from "./customersRoutes";
 import { createUserApiRouter } from "./userRoutes";
+import { createBlankframeRouter } from "./blankframeRoutes";
 import { createUserSessionSyncRouter } from "./userSessionSyncRoutes";
 import { createUserEdlRouter } from "./userEdlRoutes";
 import { createSharedTracksRouter } from "./sharedTracksRoutes";
@@ -141,6 +142,7 @@ app.use("/api/auth/bootstrap", authLimiter);
 
 app.use("/api", createUserApiRouter());
 app.use("/api", createUserSessionSyncRouter());
+app.use("/api", createBlankframeRouter());
 app.use("/api", createUserEdlRouter());
 app.use("/api", createCustomerEdlRouter());
 app.use("/api", createSharedTracksRouter());
