@@ -19,6 +19,15 @@ export type PersistedWorkspaceV1 = {
   sessionKind?: "edl" | "playlistLinked";
 };
 
+export function isPersistedWorkspaceV1(o: unknown): o is PersistedWorkspaceV1 {
+  if (!o || typeof o !== "object") return false;
+  const x = o as Record<string, unknown>;
+  if (x.v !== 1) return false;
+  if (typeof x.fileName !== "string" || typeof x.edlText !== "string") return false;
+  if (!Array.isArray(x.playlist)) return false;
+  return true;
+}
+
 export async function saveWorkspace(data: PersistedWorkspaceV1, userId: string): Promise<void> {
   try {
     const db = await openSettingsDb();

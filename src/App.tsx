@@ -106,7 +106,18 @@ import { apiStoragePathsFetch } from "./api/storagePathsApi";
 import { fetchUsersList } from "./api/usersApi";
 import type { AppUserRecord } from "./storage/appUsersStorage";
 import { displayName } from "./storage/appUsersStorage";
-import { clearWorkspace, loadWorkspace, saveWorkspace } from "./storage/workspaceStorage";
+import {
+  apiUserSessionSyncFetch,
+  apiUserSessionSyncPut,
+  type UserSessionSyncConflictPayload,
+} from "./api/userSessionSyncApi";
+import {
+  clearWorkspace,
+  isPersistedWorkspaceV1,
+  loadWorkspace,
+  saveWorkspace,
+  type PersistedWorkspaceV1,
+} from "./storage/workspaceStorage";
 import {
   clampFontScale,
   FONT_SCALE_DEFAULT,
@@ -131,10 +142,14 @@ import {
   stripExtension,
 } from "./tracks/sanitizeFilename";
 import { getMusicDbPathsMissingOnServer } from "./tracks/missingMusicDbFiles";
+import { createFakeMp3Blob } from "./tracks/fakeMp3Blob";
 import {
+  ensureUnderSonstigeTracksRelativePath,
   isSafeTracksRelativePath,
+  normalizeUserInputToRelativeMp3Path,
   recreatePlaceholderMp3sOnShared,
   relativePathHasSubfolder,
+  SONSTIGE_TRACKS_REL_FOLDER,
 } from "./tracks/recreatePlaceholderMp3s";
 import { createSharedFakeMp3Sink } from "./tracks/sharedTracksSink";
 import {
@@ -697,6 +712,30 @@ function ColumnFilterTh({
   );
 }
 
+function workspaceFromAppState(
+  playlist: PlaylistEntry[] | null,
+  fileName: string | null,
+  edlTitle: string | null,
+  edlRawText: string | null
+): PersistedWorkspaceV1 | null {
+  if (playlist == null || !fileName) return null;
+  const sessionKind =
+    edlRawText === null || edlRawText === "" ? "playlistLinked" : "edl";
+  return {
+    v: 1,
+    fileName,
+    edlTitle,
+    edlText: edlRawText ?? "",
+    playlist,
+    sessionKind,
+  };
+}
+
+function tagsFromUnknownSession(ts: unknown): TagStore {
+  if (ts && typeof ts === "object" && !Array.isArray(ts)) return ts as TagStore;
+  return {};
+}
+
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const restoreBackupInputRef = useRef<HTMLInputElement>(null);
@@ -737,11 +776,23 @@ export default function App() {
   const [mp3RecreateBasenameConfirmPaths, setMp3RecreateBasenameConfirmPaths] = useState<
     string[] | null
   >(null);
+  const [newMp3DialogOpen, setNewMp3DialogOpen] = useState(false);
+  const [newMp3FileNameDraft, setNewMp3FileNameDraft] = useState("");
+  const [newMp3Creating, setNewMp3Creating] = useState(false);
+  const [newMp3Error, setNewMp3Error] = useState<string | null>(null);
+  const newMp3InputRef = useRef<HTMLInputElement | null>(null);
   const [mp3DbToolsMenuOpen, setMp3DbToolsMenuOpen] = useState(false);
   const mp3DbToolsMenuRef = useRef<HTMLDivElement>(null);
   const dupApplyAllCheckedRef = useRef(false);
   dupApplyAllCheckedRef.current = dupApplyAllChecked;
   const [tagStore, setTagStore] = useState<TagStore>(() => ({}));
+  /** Nach Login: Server-Sitzung geladen — erst dann Push zum Server (verhindert Überschreiben mit leerem Stand). */
+  const [sessionSyncReady, setSessionSyncReady] = useState(false);
+  /** Zuletzt mit dem Server abgeglichener Zeitstempel (`null` = noch keine Server-Datei). */
+  const sessionSyncServerRevisionRef = useRef<string | null>(null);
+  const [sessionSyncConflict, setSessionSyncConflict] =
+    useState<UserSessionSyncConflictPayload | null>(null);
+  const [sessionSyncForceBusy, setSessionSyncForceBusy] = useState(false);
   const tagStoreRef = useRef<TagStore>({} as TagStore);
   tagStoreRef.current = tagStore;
   /** GVL-Abgleich: zeilenweise Vorher/Nachher oder nur Hinweis bei fehlenden Labelcodes. */
@@ -1004,48 +1055,149 @@ export default function App() {
     }
   }, []);
 
-  /** Arbeitsbereich, EDL-Browser und Playlist-Tags sind pro Nutzer; Musikdatenbank bleibt global. */
+  /**
+   * Arbeitsbereich und Playlist-Tags: zuerst Server (`/api/me/session-sync`), sonst lokal; lokal ohne Serverstand wird hochgeladen.
+   * Musikdatenbank bleibt global.
+   */
   useEffect(() => {
-    if (!sessionUserId) return;
+    if (!sessionUserId) {
+      setSessionSyncReady(false);
+      sessionSyncServerRevisionRef.current = null;
+      setSessionSyncConflict(null);
+      return;
+    }
+    setSessionSyncReady(false);
+    sessionSyncServerRevisionRef.current = null;
     let cancelled = false;
-    (async () => {
-      const w = await loadWorkspace(sessionUserId);
-      if (cancelled) return;
-      if (w) {
-        setPlaylist((prev) => (prev !== null ? prev : w.playlist));
-        setFileName((prev) => (prev !== null ? prev : w.fileName));
-        setEdlTitle((prev) => (prev !== null ? prev : w.edlTitle));
-        setEdlRawText((prev) => {
-          if (prev !== null) return prev;
-          const sk =
-            w.sessionKind ?? (typeof w.edlText === "string" && w.edlText.trim() ? "edl" : "playlistLinked");
-          if (sk === "playlistLinked") return null;
-          return typeof w.edlText === "string" ? w.edlText : null;
-        });
+    void (async () => {
+      let w: PersistedWorkspaceV1 | null = null;
+      let tags: TagStore = {};
+      let usedRemote = false;
+      let remoteUpdatedAt: string | null = null;
+
+      try {
+        const remote = await apiUserSessionSyncFetch();
+        if (cancelled) return;
+        if (remote?.updatedAt) {
+          remoteUpdatedAt = remote.updatedAt;
+          const ws = remote.workspace;
+          const ts = remote.tagStore;
+          const okWs = ws == null || isPersistedWorkspaceV1(ws);
+          const okTs =
+            ts == null || (typeof ts === "object" && ts !== null && !Array.isArray(ts));
+          if (okWs && okTs) {
+            usedRemote = true;
+            if (ws != null && isPersistedWorkspaceV1(ws)) {
+              w = ws;
+              if (!w.sessionKind && w.edlText.trim() === "" && w.playlist.length > 0) {
+                w = { ...w, sessionKind: "playlistLinked" };
+              }
+            } else {
+              w = null;
+            }
+            tags =
+              ts && typeof ts === "object" && !Array.isArray(ts)
+                ? (ts as TagStore)
+                : {};
+          }
+        }
+      } catch {
+        /* offline / älterer Server */
       }
 
-      let tags = loadTagStore(sessionUserId);
-      if (Object.keys(tags).length === 0) {
-        const fromIdb = await loadTagStoreFromIdb(sessionUserId);
-        if (!cancelled && fromIdb && Object.keys(fromIdb).length > 0) {
-          tags = fromIdb;
-          saveTagStore(fromIdb, sessionUserId);
+      if (!usedRemote) {
+        w = await loadWorkspace(sessionUserId);
+        if (cancelled) return;
+        tags = loadTagStore(sessionUserId);
+        if (Object.keys(tags).length === 0) {
+          const fromIdb = await loadTagStoreFromIdb(sessionUserId);
+          if (!cancelled && fromIdb && Object.keys(fromIdb).length > 0) {
+            tags = fromIdb;
+            saveTagStore(fromIdb, sessionUserId);
+          }
+        }
+        try {
+          const put = await apiUserSessionSyncPut({
+            workspace: w,
+            tagStore: tags,
+            baseUpdatedAt: null,
+          });
+          if (put.ok) {
+            sessionSyncServerRevisionRef.current = put.updatedAt;
+          } else {
+            setSessionSyncConflict(put.conflict);
+          }
+        } catch {
+          /* weiter mit lokalem Stand */
         }
       }
-      if (!cancelled) setTagStore(tags);
-      if (!cancelled && w?.playlist?.length && !isCustomerUser) {
+
+      if (cancelled) return;
+
+      if (usedRemote) {
+        if (remoteUpdatedAt) {
+          sessionSyncServerRevisionRef.current = remoteUpdatedAt;
+        }
+        if (w) {
+          setPlaylist(w.playlist);
+          setFileName(w.fileName);
+          setEdlTitle(w.edlTitle);
+          {
+            const sk =
+              w.sessionKind ??
+              (typeof w.edlText === "string" && w.edlText.trim() ? "edl" : "playlistLinked");
+            setEdlRawText(
+              sk === "playlistLinked"
+                ? null
+                : typeof w.edlText === "string"
+                  ? w.edlText
+                  : null
+            );
+          }
+          void saveWorkspace(w, sessionUserId);
+        } else {
+          setPlaylist(null);
+          setFileName(null);
+          setEdlTitle(null);
+          setEdlRawText(null);
+          void clearWorkspace(sessionUserId);
+        }
+        setTagStore(tags);
+        saveTagStore(tags, sessionUserId);
+      } else {
+        if (w) {
+          setPlaylist((prev) => (prev !== null ? prev : w!.playlist));
+          setFileName((prev) => (prev !== null ? prev : w!.fileName));
+          setEdlTitle((prev) => (prev !== null ? prev : w!.edlTitle));
+          setEdlRawText((prev) => {
+            if (prev !== null) return prev;
+            const sk =
+              w!.sessionKind ??
+              (typeof w!.edlText === "string" && w!.edlText.trim() ? "edl" : "playlistLinked");
+            if (sk === "playlistLinked") return null;
+            return typeof w!.edlText === "string" ? w!.edlText : null;
+          });
+        }
+        setTagStore(tags);
+      }
+
+      const pl = w?.playlist;
+      if (!cancelled && pl?.length && !isCustomerUser) {
         const state = await refreshMusicDbFromServer();
         if (cancelled) return;
         const paths = state?.paths ?? [];
         const db = loadGvlLabelDb();
         if (db?.entries?.length) {
           const { updates, missingInGvl } = enumerateGvlPlaylistSyncItems({
-            playlist: w.playlist,
+            playlist: pl,
             tagStore: tags,
             musicDbFileNames: paths,
             gvlDb: db,
           });
-          if (updates.length === 0 && missingInGvl.length === 0) return;
+          if (updates.length === 0 && missingInGvl.length === 0) {
+            setSessionSyncReady(true);
+            return;
+          }
           queueMicrotask(() => {
             pendingPostGvlSyncRef.current = { runExport: false };
             if (updates.length > 0) {
@@ -1061,6 +1213,7 @@ export default function App() {
           });
         }
       }
+      if (!cancelled) setSessionSyncReady(true);
     })();
     return () => {
       cancelled = true;
@@ -1170,6 +1323,104 @@ export default function App() {
       sessionUserId
     );
   }, [playlist, fileName, edlTitle, edlRawText, sessionUserId]);
+
+  /** Server-Session: gleicher Login auf mehreren Rechnern (debounced); Konflikt → Modal. */
+  useEffect(() => {
+    if (!sessionUserId || !sessionSyncReady) return;
+    const ws = workspaceFromAppState(playlist, fileName, edlTitle, edlRawText);
+    const store = tagStore;
+    const id = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const put = await apiUserSessionSyncPut({
+            workspace: ws,
+            tagStore: store,
+            baseUpdatedAt: sessionSyncServerRevisionRef.current,
+          });
+          if (put.ok) {
+            sessionSyncServerRevisionRef.current = put.updatedAt;
+          } else {
+            setSessionSyncConflict(put.conflict);
+          }
+        } catch {
+          /* offline */
+        }
+      })();
+    }, 2200);
+    return () => window.clearTimeout(id);
+  }, [
+    sessionUserId,
+    sessionSyncReady,
+    playlist,
+    fileName,
+    edlTitle,
+    edlRawText,
+    tagStore,
+  ]);
+
+  const applySessionSyncServerPayload = useCallback(
+    (c: UserSessionSyncConflictPayload) => {
+      if (!sessionUserId) return;
+      let pw: PersistedWorkspaceV1 | null = null;
+      const ws = c.workspace;
+      if (ws != null && isPersistedWorkspaceV1(ws)) {
+        pw = ws;
+        if (!pw.sessionKind && pw.edlText.trim() === "" && pw.playlist.length > 0) {
+          pw = { ...pw, sessionKind: "playlistLinked" };
+        }
+      }
+      const nextTags = tagsFromUnknownSession(c.tagStore);
+      if (pw) {
+        setPlaylist(pw.playlist);
+        setFileName(pw.fileName);
+        setEdlTitle(pw.edlTitle);
+        const sk =
+          pw.sessionKind ??
+          (typeof pw.edlText === "string" && pw.edlText.trim() ? "edl" : "playlistLinked");
+        setEdlRawText(
+          sk === "playlistLinked"
+            ? null
+            : typeof pw.edlText === "string"
+              ? pw.edlText
+              : null
+        );
+        void saveWorkspace(pw, sessionUserId);
+      } else {
+        setPlaylist(null);
+        setFileName(null);
+        setEdlTitle(null);
+        setEdlRawText(null);
+        void clearWorkspace(sessionUserId);
+      }
+      setTagStore(nextTags);
+      saveTagStore(nextTags, sessionUserId);
+      sessionSyncServerRevisionRef.current = c.updatedAt;
+      setSessionSyncConflict(null);
+    },
+    [sessionUserId]
+  );
+
+  const sessionSyncOverwriteServerWithLocal = useCallback(async () => {
+    if (!sessionUserId) return;
+    setSessionSyncForceBusy(true);
+    setError(null);
+    try {
+      const ws = workspaceFromAppState(playlist, fileName, edlTitle, edlRawText);
+      const put = await apiUserSessionSyncPut({
+        workspace: ws,
+        tagStore: tagStore,
+        force: true,
+      });
+      if (put.ok) {
+        sessionSyncServerRevisionRef.current = put.updatedAt;
+        setSessionSyncConflict(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sitzung konnte nicht gespeichert werden.");
+    } finally {
+      setSessionSyncForceBusy(false);
+    }
+  }, [sessionUserId, playlist, fileName, edlTitle, edlRawText, tagStore]);
 
   const runEdlImport = useCallback(
     async (
@@ -1692,12 +1943,82 @@ export default function App() {
     [playlist, tagStore, sessionUserId]
   );
 
+  const confirmCreateNewMp3 = useCallback(async () => {
+    setNewMp3Error(null);
+    if (!sessionUserId || !isAdmin) {
+      setNewMp3Error("Nur Administratoren können neue MP3-Dateien anlegen.");
+      return;
+    }
+    const normalized = normalizeUserInputToRelativeMp3Path(newMp3FileNameDraft);
+    if (!normalized) {
+      setNewMp3Error(
+        "Bitte einen gültigen relativen Pfad eingeben (z. B. Ordner/Titel oder Ordner/Titel.mp3), ohne .. und ohne führenden Schrägstrich."
+      );
+      return;
+    }
+    const rel = ensureUnderSonstigeTracksRelativePath(normalized);
+    if (!rel) {
+      setNewMp3Error("Der Zielpfad ist ungültig.");
+      return;
+    }
+    if (musicDbFileNames.some((p) => p.toLowerCase() === rel.toLowerCase())) {
+      setNewMp3Error("Dieser Pfad ist bereits in der Musikdatenbank.");
+      return;
+    }
+    setNewMp3Creating(true);
+    try {
+      let exists = false;
+      try {
+        exists = await apiSharedTracksExists(rel);
+      } catch (e) {
+        setNewMp3Error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      if (exists) {
+        setNewMp3Error("Unter diesem Pfad existiert bereits eine Datei.");
+        return;
+      }
+      const blob = createFakeMp3Blob();
+      const buf = await blob.arrayBuffer();
+      await apiSharedTracksWriteBinary(rel, buf);
+      const state = await apiSharedMusicDbRegister([rel]);
+      setMusicDbFileNames(state.paths);
+      setMusicDbMetadata(state.metadata);
+      setNewMp3DialogOpen(false);
+      setNewMp3FileNameDraft("");
+      setInfoMessage(null);
+      setHighlightMp3Name(rel);
+      window.setTimeout(() => setHighlightMp3Name(null), 2500);
+      openFileTags(rel);
+    } catch (e) {
+      setNewMp3Error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setNewMp3Creating(false);
+    }
+  }, [
+    sessionUserId,
+    isAdmin,
+    newMp3FileNameDraft,
+    musicDbFileNames,
+    openFileTags,
+  ]);
+
   const openFileTagsMulti = useCallback((fileNames: string[]) => {
     const uniq = [...new Set(fileNames)];
     if (uniq.length < 2) return;
     setTagEditInitial({});
     setTagModal({ kind: "fileMulti", fileNames: uniq });
   }, []);
+
+  useEffect(() => {
+    if (!newMp3DialogOpen) return;
+    const id = window.requestAnimationFrame(() => {
+      const el = newMp3InputRef.current;
+      el?.focus();
+      el?.select();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [newMp3DialogOpen]);
 
   /** Mehrfachauswahl: M öffnet Multi-Tag-Bearbeitung (Playlist oder Musikdatenbank). */
   useEffect(() => {
@@ -1921,21 +2242,22 @@ export default function App() {
           persistTagStore(next);
           return next;
         });
-      } else {
-        const base = defaultTagsFromPlaylistTitle(tagModal.fileName);
-        const key = fileTagKey(tagModal.fileName);
+      } else if (tagModal.kind === "file") {
+        const fn = tagModal.fileName;
+        const base = defaultTagsFromPlaylistTitle(fn);
+        const key = fileTagKey(fn);
         const overlay = overlayFromForm(base, form);
-        if (sessionUserId && isMp3FileName(tagModal.fileName)) {
+        if (sessionUserId && isMp3FileName(fn)) {
           try {
             await writeAudioTagsToSharedMp3(
               apiSharedTracksReadBinary,
               apiSharedTracksWriteBinary,
-              tagModal.fileName,
+              fn,
               form
             );
             try {
-              const entry = await apiSharedMusicDbTouchTagEdited(tagModal.fileName);
-              setMusicDbMetadata((prev) => ({ ...prev, [tagModal.fileName]: entry }));
+              const entry = await apiSharedMusicDbTouchTagEdited(fn);
+              setMusicDbMetadata((prev) => ({ ...prev, [fn]: entry }));
             } catch {
               /* Zeitstempel optional */
             }
@@ -1954,7 +2276,7 @@ export default function App() {
           else next[key] = overlay;
           if (playlist) {
             for (const r of playlist) {
-              if (r.linkedTrackFileName === tagModal.fileName) {
+              if (r.linkedTrackFileName === fn) {
                 delete next[playlistTagKey(r.id)];
               }
             }
@@ -4364,6 +4686,23 @@ export default function App() {
                         >
                           {mp3DbPlayerVisible ? "Videoplayer ausblenden" : "Videoplayer einblenden"}
                         </button>
+                        {sessionUserId && isAdmin && (
+                          <button
+                            type="button"
+                            className="menu-item menu-item--border"
+                            role="menuitem"
+                            disabled={newMp3Creating || mp3RecreateBusy}
+                            title="Neue Platzhalter-MP3 auf dem Server anlegen und Tags bearbeiten"
+                            onClick={() => {
+                              setMp3DbToolsMenuOpen(false);
+                              setNewMp3Error(null);
+                              setNewMp3FileNameDraft("");
+                              setNewMp3DialogOpen(true);
+                            }}
+                          >
+                            Neue MP3 erstellen …
+                          </button>
+                        )}
                         {mp3KnownFromPlaylist.length > 0 && (
                           <>
                             <button
@@ -5006,6 +5345,137 @@ export default function App() {
           initialCustomerId={playlistMailPayload.initialCustomerId}
           customerMissingHint={playlistMailPayload.customerMissingHint}
         />
+      )}
+
+      {newMp3DialogOpen && sessionUserId && isAdmin && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-mp3-dialog-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !newMp3Creating) {
+              setNewMp3DialogOpen(false);
+              setNewMp3Error(null);
+            }
+          }}
+        >
+          <div className="modal modal--transfer-list-confirm" onMouseDown={(e) => e.stopPropagation()}>
+            <h2 id="new-mp3-dialog-title" className="modal-title">
+              Neue MP3 erstellen
+            </h2>
+            <p className="modal-lead">
+              Die Datei wird unter{" "}
+              <span className="mono-cell">{SONSTIGE_TRACKS_REL_FOLDER}/</span> gespeichert. Relativ
+              dazu geben Sie den Namen oder Unterordner ein (mit{" "}
+              <span className="mono-cell">/</span> trennen), z. B.{" "}
+              <span className="mono-cell">Titel.mp3</span> oder{" "}
+              <span className="mono-cell">MeinOrdner/Titel.mp3</span>.
+            </p>
+            <label className="modal-dup-tag-form-label" htmlFor="new-mp3-path-input">
+              Dateiname / Pfad
+            </label>
+            <input
+              ref={newMp3InputRef}
+              id="new-mp3-path-input"
+              className="modal-dup-tag-form-input"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              value={newMp3FileNameDraft}
+              disabled={newMp3Creating}
+              onChange={(e) => setNewMp3FileNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !newMp3Creating) {
+                  e.preventDefault();
+                  void confirmCreateNewMp3();
+                }
+              }}
+            />
+            {newMp3Error ? (
+              <p className="modal-lead" style={{ color: "var(--danger, #c62828)" }}>
+                {newMp3Error}
+              </p>
+            ) : null}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-modal"
+                disabled={newMp3Creating}
+                onClick={() => {
+                  setNewMp3DialogOpen(false);
+                  setNewMp3Error(null);
+                }}
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className="btn-modal primary"
+                disabled={newMp3Creating}
+                onClick={() => void confirmCreateNewMp3()}
+              >
+                {newMp3Creating ? "Wird angelegt …" : "OK"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sessionSyncConflict && sessionUserId && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="session-sync-conflict-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !sessionSyncForceBusy) {
+              setSessionSyncConflict(null);
+            }
+          }}
+        >
+          <div className="modal modal--transfer-list-confirm" onMouseDown={(e) => e.stopPropagation()}>
+            <h2 id="session-sync-conflict-title" className="modal-title">
+              Sitzung: Konflikt mit dem Server
+            </h2>
+            <p className="modal-lead">
+              Ihre Arbeitsdaten wurden inzwischen woanders gespeichert (anderer Rechner oder zweites
+              Browserfenster). Sie können den <strong>Server-Stand laden</strong> — dann gehen nicht
+              gespeicherte Änderungen auf diesem Gerät verloren — oder Ihren aktuellen Stand{" "}
+              <strong>erzwingen</strong> und den anderen Stand überschreiben.
+            </p>
+            <p className="modal-lead modal-lead--muted">
+              Server-Zeitstempel:{" "}
+              <span className="mono-cell">{sessionSyncConflict.updatedAt}</span>
+            </p>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-modal"
+                disabled={sessionSyncForceBusy}
+                onClick={() => setSessionSyncConflict(null)}
+              >
+                Später
+              </button>
+              <button
+                type="button"
+                className="btn-modal btn-modal--danger"
+                disabled={sessionSyncForceBusy}
+                onClick={() => void sessionSyncOverwriteServerWithLocal()}
+              >
+                {sessionSyncForceBusy ? "Speichere …" : "Meinen Stand speichern (Server überschreiben)"}
+              </button>
+              <button
+                type="button"
+                className="btn-modal primary"
+                disabled={sessionSyncForceBusy}
+                onClick={() => applySessionSyncServerPayload(sessionSyncConflict)}
+              >
+                Server-Stand laden
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {transferListConfirmOpen && (

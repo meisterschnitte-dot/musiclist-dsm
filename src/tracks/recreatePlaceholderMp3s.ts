@@ -1,5 +1,6 @@
 import { embedId3InMp3Blob } from "../audio/embedId3";
 import type { AudioTags } from "../audio/audioTags";
+import { sanitizeFilenameStem, stripExtension } from "./sanitizeFilename";
 import { createFakeMp3Blob } from "./fakeMp3Blob";
 import { getFileHandleInTracksRoot, splitTracksRelativePath } from "./tracksFolderPaths";
 import type { SharedFakeMp3Sink } from "./exportTracks";
@@ -14,6 +15,45 @@ export function isSafeTracksRelativePath(relativePath: string): boolean {
 /** `false` = nur Dateiname → Ziel ist der Stammordner des MP3-Speicherorts. */
 export function relativePathHasSubfolder(relativePath: string): boolean {
   return relativePath.replace(/\\/g, "/").includes("/");
+}
+
+/**
+ * Eingabe aus dem Dialog „Neue MP3“ → relativer Pfad mit Endung `.mp3` unter dem Speicherort.
+ * `null` bei leerer/unsicherer Eingabe oder wenn der Pfad nicht zulässig ist.
+ */
+export function normalizeUserInputToRelativeMp3Path(raw: string): string | null {
+  let s = raw.trim();
+  if (!s) return null;
+  s = s.replace(/\\/g, "/");
+  if (s.startsWith("/") || /^[a-zA-Z]:\/?/.test(s)) return null;
+  const parts = s.split("/").filter((p) => p.length > 0);
+  if (parts.length === 0) return null;
+  if (parts.some((p) => p === "." || p === "..")) return null;
+
+  const lastIdx = parts.length - 1;
+  const lastRaw = parts[lastIdx]!;
+  const lowerLast = lastRaw.toLowerCase();
+  const fileStem = lowerLast.endsWith(".mp3") ? stripExtension(lastRaw) : lastRaw;
+  const fileBase = `${sanitizeFilenameStem(fileStem)}.mp3`;
+  const dirParts = parts.slice(0, lastIdx).map((seg) => sanitizeFilenameStem(seg));
+  const rel = [...dirParts, fileBase].join("/");
+  if (!isSafeTracksRelativePath(rel)) return null;
+  return rel;
+}
+
+/** Fester Unterordner für über „Neue MP3“ angelegte Dateien (relativ zum MP3-Speicherort). */
+export const SONSTIGE_TRACKS_REL_FOLDER = "Sonstige Tracks";
+
+/**
+ * Stellt sicher, dass der Pfad unter {@link SONSTIGE_TRACKS_REL_FOLDER} liegt (Präfix wird gesetzt,
+ * wenn die Eingabe nicht schon dort beginnt).
+ */
+export function ensureUnderSonstigeTracksRelativePath(rel: string): string | null {
+  const norm = rel.replace(/\\/g, "/");
+  const prefix = `${SONSTIGE_TRACKS_REL_FOLDER}/`;
+  const out = norm.toLowerCase().startsWith(prefix.toLowerCase()) ? norm : prefix + norm;
+  if (!isSafeTracksRelativePath(out)) return null;
+  return out;
 }
 
 export type RecreatePlaceholderMp3sResult = {
