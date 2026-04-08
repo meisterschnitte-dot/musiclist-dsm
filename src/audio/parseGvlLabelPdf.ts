@@ -1,5 +1,13 @@
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+/**
+ * Expliziter ?url-Import: Vite legt die Worker-Datei als Asset ab und liefert die finale URL.
+ * `new URL("pdfjs-dist/...", import.meta.url)` kann im Produktionsbundle in Firefox beim
+ * dynamischen Laden des Workers fehlschlagen („Setting up fake worker failed“).
+ */
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
 import type { GvlLabelEntry } from "../storage/gvlLabelStore";
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 type TextItem = {
   str: string;
@@ -362,11 +370,6 @@ export async function parseGvlLabelPdfFile(
   file: File,
   onProgress?: (donePages: number, totalPages: number) => void
 ): Promise<GvlLabelEntry[]> {
-  GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/legacy/build/pdf.worker.mjs",
-    import.meta.url
-  ).toString();
-
   const buf = await file.arrayBuffer();
   const task = getDocument({ data: new Uint8Array(buf) });
   const doc = await task.promise;
