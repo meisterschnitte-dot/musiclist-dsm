@@ -32,6 +32,10 @@ import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniver
 import { openSonotonSearchWithOptionalClip, SONOTON_SEARCH_BASE_URL } from "../sonotonSearch";
 import { openEarmotionSearchWithOptionalClip, EARMOTION_ACCOUNT_URL } from "../earmotionSearch";
 import {
+  openExtremeMusicSearchWithOptionalClip,
+  EXTREME_MUSIC_URL,
+} from "../extremeMusicSearch";
+import {
   apiBlankframeTracksFetch,
   mapBlankframeTrackToAudioTagsPartial,
 } from "../api/blankframeApi";
@@ -60,6 +64,10 @@ import {
   looksLikeBlankframeMetadata,
   parseBlankframeMetadataText,
 } from "../audio/parseBlankframeMetadataText";
+import {
+  looksLikeExtremeMusicMetadata,
+  parseExtremeMusicMetadataText,
+} from "../audio/parseExtremeMusicMetadataText";
 
 type TagFormFields = Record<Exclude<keyof AudioTags, "warnung">, string>;
 
@@ -282,11 +290,13 @@ export function TagEditorModal({
         ? parseAppleMusicCreditsText(pasteDraft)
         : looksLikeSonotonMetadata(pasteDraft)
           ? parseSonotonMetadataText(pasteDraft)
-          : looksLikeEarmotionMetadata(pasteDraft)
-            ? parseEarmotionMetadataText(pasteDraft)
-            : looksLikeBlankframeMetadata(pasteDraft)
-              ? parseBlankframeMetadataText(pasteDraft)
-              : parseGemaOcrText(pasteDraft);
+          : looksLikeExtremeMusicMetadata(pasteDraft)
+            ? parseExtremeMusicMetadataText(pasteDraft)
+            : looksLikeEarmotionMetadata(pasteDraft)
+              ? parseEarmotionMetadataText(pasteDraft)
+              : looksLikeBlankframeMetadata(pasteDraft)
+                ? parseBlankframeMetadataText(pasteDraft)
+                : parseGemaOcrText(pasteDraft);
     let mergedFields: Partial<AudioTags> = { ...fields };
     const lc = mergedFields.labelcode?.trim();
     if (lc) {
@@ -464,7 +474,8 @@ export function TagEditorModal({
         {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
-            Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Earmotion / Blankframe
+            Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Extreme Music / Earmotion /
+            Blankframe
           </div>
           <textarea
             className="tag-import-textarea"
@@ -608,6 +619,14 @@ export function TagEditorModal({
               onClick={() => openSonotonSearchWithOptionalClip(p7SearchSource)}
             >
               Sonoton-Suche
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              title={`${EXTREME_MUSIC_URL} — Ersten Code bis zur ersten Leerzeile (z. B. aus dem Dateinamen) in die Zwischenablage; auf der Seite einfügen und Metadaten hier wieder einfügen.`}
+              onClick={() => openExtremeMusicSearchWithOptionalClip(p7SearchSource)}
+            >
+              Extreme-Suche
             </button>
             <button
               type="button"
