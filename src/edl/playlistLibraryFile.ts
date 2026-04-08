@@ -12,6 +12,31 @@ export function isPlaylistLibraryFileName(fileName: string): boolean {
   return l.endsWith(PLAYLIST_LIBRARY_FILE_EXT) || l.endsWith(LEGACY_PLAYLIST_LIBRARY_FILE_EXT);
 }
 
+/** Referenz auf eine Bibliotheksdatei (Mehrfachauswahl / Kontextmenü). */
+export type EdlLibraryFileRef = {
+  parentSegments: string[];
+  fileName: string;
+};
+
+export function edlLibraryFileRefKey(ref: EdlLibraryFileRef): string {
+  return JSON.stringify({ parentSegments: ref.parentSegments, fileName: ref.fileName });
+}
+
+export function parseEdlLibraryFileRefKey(key: string): EdlLibraryFileRef | null {
+  try {
+    const o = JSON.parse(key) as unknown;
+    if (!o || typeof o !== "object") return null;
+    const r = o as Record<string, unknown>;
+    const segs = r.parentSegments;
+    const fn = r.fileName;
+    if (!Array.isArray(segs) || !segs.every((x) => typeof x === "string")) return null;
+    if (typeof fn !== "string" || !fn.trim()) return null;
+    return { parentSegments: segs as string[], fileName: fn };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Dieselbe Playlist im Browser (z. B. `Film.edl` und nach Export `Film.list`;
  * oder `.xls` → `.list` mit gleichem Stamm).

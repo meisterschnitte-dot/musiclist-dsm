@@ -13,7 +13,12 @@ import type {
   EdlLibraryAccess,
   OpenLibraryFilePayload,
 } from "../edl/edlLibraryAccess";
-import { isPlaylistLibraryFileName } from "../edl/playlistLibraryFile";
+import {
+  edlLibraryFileRefKey,
+  isPlaylistLibraryFileName,
+  parseEdlLibraryFileRefKey,
+  type EdlLibraryFileRef,
+} from "../edl/playlistLibraryFile";
 import { isGemaXlsFileName } from "../gema/parseGemaXls";
 
 function pathKey(segments: string[]): string {
@@ -85,6 +90,11 @@ type Props = {
   activeLibraryFile?: { parentSegments: string[]; fileName: string } | null;
   /** Nur lesen: keine Importe, kein Löschen, kein Verschieben (Kundenkonten). */
   readOnly?: boolean;
+  /**
+   * Gespeicherte Playlists (.list): ID3 von verknüpften MP3s in den Tag-Store lesen (Anzeige in Tabelle).
+   * Mehrfachauswahl: Klick auf .list markiert; Strg/Cmd+Klick ergänzt. Kontextmenü auf einer markierten Datei wendet auf alle Markierungen zu.
+   */
+  onPlaylistListTagRefresh?: (files: EdlLibraryFileRef[]) => void | Promise<void>;
 };
 
 export function EdlLibraryPanel({
@@ -107,6 +117,7 @@ export function EdlLibraryPanel({
   onEdlFolderMoved,
   activeLibraryFile = null,
   readOnly = false,
+  onPlaylistListTagRefresh,
 }: Props) {
   const [cache, setCache] = useState<Record<string, EdlDirEntry[] | undefined>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -125,6 +136,8 @@ export function EdlLibraryPanel({
   const [renameFolderNewName, setRenameFolderNewName] = useState("");
   const renameFolderInputRef = useRef<HTMLInputElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  /** Mehrfachauswahl nur für `.list` / `.egpl` — Schlüssel `edlLibraryFileRefKey`. */
+  const [selectedPlaylistFileKeys, setSelectedPlaylistFileKeys] = useState<Set<string>>(() => new Set());
   const [archiveMenuOpen, setArchiveMenuOpen] = useState(false);
   const archiveCompactRef = useRef<HTMLDivElement>(null);
 
@@ -167,6 +180,10 @@ export function EdlLibraryPanel({
   useEffect(() => {
     void reloadCaches();
   }, [reloadCaches, refreshKey]);
+
+  useEffect(() => {
+    setSelectedPlaylistFileKeys(new Set());
+  }, [library, refreshKey]);
 
   /** Aktive Datei sichtbar: alle übergeordneten Ordner aufklappen. */
   useEffect(() => {
@@ -229,6 +246,24 @@ export function EdlLibraryPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [archiveMenuOpen]);
+
+  const togglePlaylistFileSelection = useCallback(
+    (parentSegments: string[], fileName: string, ev: MouseEvent) => {
+      const k = edlLibraryFileRefKey({ parentSegments, fileName });
+      setSelectedPlaylistFileKeys((prev) => {
+        const next = new Set(prev);
+        if (ev.ctrlKey || ev.metaKey) {
+          if (next.has(k)) next.delete(k);
+          else next.add(k);
+        } else {
+          next.clear();
+          next.add(k);
+        }
+        return next;
+      });
+    },
+    []
+  );
 
   const openContextMenu = useCallback(
     (e: MouseEvent, kind: "file" | "directory", parentSegments: string[], name: string) => {
@@ -698,6 +733,8 @@ export function EdlLibraryPanel({
       }
       const isPlaylistFile = isPlaylistLibraryFileName(row.name);
       const isGemaXlsFile = isGemaXlsFileName(row.name);
+      const playlistSelKey = edlLibraryFileRefKey({ parentSegments, fileName: row.name });
+      const isPlaylistFileSelected = isPlaylistFile && selectedPlaylistFileKeys.has(playlistSelKey);
       const isActive =
         activeLibraryFile != null &&
         activeLibraryFile.fileName === row.name &&
@@ -706,7 +743,10 @@ export function EdlLibraryPanel({
       return (
         <li key={`file:${key}:${row.name}`} className="edl-tree-node">
           <div
-            className="edl-tree-line edl-tree-line--file"
+            className={
+              "edl-tree-line edl-tree-line--file" +
+              (isPlaylistFileSelected ? " edl-tree-line--selected" : "")
+            }
             onContextMenu={
               (e) => openContextMenu(e, "file", parentSegments, row.name)
             }
@@ -725,7 +765,9 @@ export function EdlLibraryPanel({
                       ? "Doppelklick: GEMA-Liste (XLS) laden"
                       : "Doppelklick: EDL laden"
                   : isPlaylistFile
-                    ? "Zum Verschieben ziehen · Doppelklick: gespeicherte Playlist laden"
+                    ? (onPlaylistListTagRefresh && !readOnly
+                        ? "Klick: Auswahl · Strg+Klick: mehrere .list · Rechtsklick: Tag-Refresh · Ziehen: verschieben · Doppelklick: laden"
+                        : "Zum Verschieben ziehen · Doppelklick: gespeicherte Playlist laden")
                     : isGemaXlsFile
                       ? "Zum Verschieben ziehen · Doppelklick: GEMA-Liste (XLS) laden"
                       : "Zum Verschieben ziehen · Doppelklick: EDL laden"
@@ -739,6 +781,12 @@ export function EdlLibraryPanel({
                 className={
                   "edl-library-file-open" + (isActive ? " edl-library-file-open--active" : "")
                 }
+                onClick={(ev) => {
+                  if (busy || !isPlaylistFile || !onPlaylistListTagRefresh || readOnly) return;
+                  if (ev.detail > 1) return;
+                  ev.preventDefault();
+                  togglePlaylistFileSelection(parentSegments, row.name, ev);
+                }}
                 onDoubleClick={() => {
                   if (busy) return;
                   void openFile(parentSegments, row.name);
@@ -1051,6 +1099,56 @@ export function EdlLibraryPanel({
                 }}
               >
                 Umbenennen …
+              </button>
+            ) : null}
+            {contextMenu.kind === "file" &&
+            onPlaylistListTagRefresh &&
+            !readOnly &&
+            isPlaylistLibraryFileName(contextMenu.name) ? (
+              <button
+                type="button"
+                className="edl-ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  const m = contextMenu;
+                  setContextMenu(null);
+                  const ctxRef: EdlLibraryFileRef = {
+                    parentSegments: m.parentSegments,
+                    fileName: m.name,
+                  };
+                  const ctxKey = edlLibraryFileRefKey(ctxRef);
+                  let refs: EdlLibraryFileRef[];
+                  if (selectedPlaylistFileKeys.has(ctxKey)) {
+                    const multi = [...selectedPlaylistFileKeys]
+                      .map((k) => parseEdlLibraryFileRefKey(k))
+                      .filter((x): x is EdlLibraryFileRef => x !== null)
+                      .filter((x) => isPlaylistLibraryFileName(x.fileName));
+                    refs = multi.length > 0 ? multi : [ctxRef];
+                  } else {
+                    refs = [ctxRef];
+                  }
+                  void (async () => {
+                    try {
+                      await onPlaylistListTagRefresh(refs);
+                      setSelectedPlaylistFileKeys(new Set());
+                    } catch {
+                      /* Fehler: App zeigt Meldung */
+                    }
+                  })();
+                }}
+              >
+                Tag-Refresh aus MP3 …
+                {(() => {
+                  const ctxKey = edlLibraryFileRefKey({
+                    parentSegments: contextMenu.parentSegments,
+                    fileName: contextMenu.name,
+                  });
+                  const n = [...selectedPlaylistFileKeys].filter((k) => {
+                    const p = parseEdlLibraryFileRefKey(k);
+                    return p !== null && isPlaylistLibraryFileName(p.fileName);
+                  }).length;
+                  return selectedPlaylistFileKeys.has(ctxKey) && n > 1 ? ` (${n} Listen)` : "";
+                })()}
               </button>
             ) : null}
             <button

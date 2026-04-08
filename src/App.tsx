@@ -43,6 +43,7 @@ import { createServerEdlLibraryAccess } from "./edl/serverEdlLibraryAccess";
 import {
   edlFileNameToPlaylistFileName,
   gemaXlsFileNameToPlaylistFileName,
+  type EdlLibraryFileRef,
   isPlaylistLibraryFileName,
   LEGACY_PLAYLIST_LIBRARY_FILE_EXT,
   parsePlaylistLibraryFile,
@@ -1547,6 +1548,68 @@ export default function App() {
       }
     },
     [sessionUserId, refreshMusicDbFromServer, gvlLabelDb]
+  );
+
+  /** Liest ID3 von allen in den .list-Dateien verknüpften MP3s und schreibt sie in den Tag-Store (Tabellenanzeige). */
+  const refreshPlaylistLibraryTagsFromMp3Lists = useCallback(
+    async (targets: EdlLibraryFileRef[]) => {
+      if (!sessionUserId) {
+        setError("Bitte anmelden.");
+        return;
+      }
+      if (!edlLibraryAccess) {
+        setError("Kein Zugriff auf den EDL- & Playlist Browser.");
+        return;
+      }
+      const listFiles = targets.filter((t) => isPlaylistLibraryFileName(t.fileName));
+      if (listFiles.length === 0) {
+        setInfoMessage("Keine gültige .list-Datei zum Aktualisieren.");
+        return;
+      }
+      setError(null);
+      setImportOverlay({ label: "Tags aus MP3-Dateien werden gelesen …", progress: 40 });
+      try {
+        const next: TagStore = { ...tagStoreRef.current };
+        let mp3Ok = 0;
+        let mp3Fail = 0;
+        for (const loc of listFiles) {
+          const text = await edlLibraryAccess.readText(loc.parentSegments, loc.fileName);
+          const parsed = parsePlaylistLibraryFile(text);
+          if (parsed.tagsByRowId) {
+            for (const [rowId, tags] of Object.entries(parsed.tagsByRowId)) {
+              const pk = playlistTagKey(rowId);
+              next[pk] = mergeAudioTags(next[pk] ?? {}, tags);
+            }
+          }
+          for (const row of parsed.playlist) {
+            const linked = row.linkedTrackFileName?.trim();
+            if (!linked || !isMp3FileName(linked)) continue;
+            try {
+              const buf = await apiSharedTracksReadBinary(linked);
+              const file = new File([buf], basenamePath(linked), { type: "audio/mpeg" });
+              const id3 = await readAudioTagsFromBlob(file);
+              const fk = playlistEntryTagStoreKey(row);
+              next[fk] = mergeAudioTags(next[fk] ?? {}, id3);
+              mp3Ok += 1;
+            } catch {
+              mp3Fail += 1;
+            }
+          }
+        }
+        setTagStore(next);
+        persistTagStore(next);
+        const parts = [
+          `${listFiles.length} Playlist-Datei(en), ${mp3Ok} MP3-Zuordnung(en) mit Tags aktualisiert.`,
+        ];
+        if (mp3Fail > 0) parts.push(`${mp3Fail} MP3-Datei(en) nicht lesbar.`);
+        setInfoMessage(parts.join(" "));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Tag-Refresh fehlgeschlagen.");
+      } finally {
+        setImportOverlay(null);
+      }
+    },
+    [sessionUserId, edlLibraryAccess, persistTagStore]
   );
 
   const runGemaXlsImport = useCallback(
@@ -4560,6 +4623,9 @@ export default function App() {
                               fileName: loadedLibraryFile.fileName,
                             }
                           : null
+                      }
+                      onPlaylistListTagRefresh={
+                        sessionUserId ? refreshPlaylistLibraryTagsFromMp3Lists : undefined
                       }
                     />
                   </div>
