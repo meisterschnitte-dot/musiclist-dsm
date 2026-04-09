@@ -8,6 +8,8 @@ type Props = {
   onConfirm: (customerId: string) => void;
   title?: string;
   intro?: string;
+  /** Beschriftung des primären Buttons (Standard: Transfer). */
+  confirmButtonLabel?: string;
 };
 
 export function TransferCustomerModal({
@@ -16,6 +18,7 @@ export function TransferCustomerModal({
   onConfirm,
   title = "Kunde für Playlist & Mail",
   intro = "Die erzeugte .list wird diesem Kunden zugeordnet. Er sieht sie im Konto erst nach dem Versand der Playlist-Mail. Ohne Auswahl kein Transfer.",
+  confirmButtonLabel = "OK — Transfer starten",
 }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -82,7 +85,7 @@ export function TransferCustomerModal({
         </label>
         <div className="modal-actions">
           <button type="button" className="btn-modal primary" disabled={busy} onClick={submit}>
-            OK — Transfer starten
+            {confirmButtonLabel}
           </button>
           <button type="button" className="btn-modal" disabled={busy} onClick={onClose}>
             Abbrechen

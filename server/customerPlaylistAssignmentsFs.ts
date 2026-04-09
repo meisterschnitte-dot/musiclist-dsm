@@ -83,6 +83,23 @@ export async function writeAssignmentsDb(db: Db): Promise<void> {
   });
 }
 
+/** Entfernt diese Bibliotheks-Playlist aus allen Kunden-Zuweisungen (z. B. vor erneuter exklusiver Zuweisung). */
+export async function removePlaylistAssignmentForAllCustomers(ref: PlaylistLibraryRef): Promise<void> {
+  const db = await readAssignmentsDb();
+  const k = refKey(ref);
+  let changed = false;
+  for (const cid of Object.keys(db.byCustomer)) {
+    const list = db.byCustomer[cid]!;
+    const next = list.filter((r) => refKey(r) !== k);
+    if (next.length !== list.length) {
+      changed = true;
+      if (next.length === 0) delete db.byCustomer[cid];
+      else db.byCustomer[cid] = next;
+    }
+  }
+  if (changed) await writeAssignmentsDb(db);
+}
+
 export async function registerPlaylistAssignmentForCustomer(
   customerId: string,
   ref: PlaylistLibraryRef

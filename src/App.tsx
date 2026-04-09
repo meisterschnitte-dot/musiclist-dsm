@@ -203,6 +203,7 @@ import { arrayBufferToBase64 } from "./api/sendPlaylistMailApi";
 import {
   lookupPlaylistPendingCustomerRequest,
   registerPlaylistPendingRequest,
+  setPlaylistCustomerAssignmentRequest,
 } from "./api/playlistPendingApi";
 
 const IMPORT_EDL_TOOLTIP =
@@ -948,6 +949,9 @@ export default function App() {
   } | null>(null);
   /** Admin: vor Transfer — Kunde wählen; Ref wird nach erfolgreicher Server-.list an /api/playlist-pending/register gesendet. */
   const [transferCustomerModalOpen, setTransferCustomerModalOpen] = useState(false);
+  /** Admin: Rechtsklick auf .list im Browser — Kunde für freigegebene Ansicht zuweisen. */
+  const [libraryListCustomerAssignRef, setLibraryListCustomerAssignRef] =
+    useState<EdlLibraryFileRef | null>(null);
   const transferCustomerIdForPendingRef = useRef<string | null>(null);
   const pendingTransferKindRef = useRef<"full" | "offline" | null>(null);
 
@@ -2808,6 +2812,36 @@ export default function App() {
     setTransferCustomerModalOpen(false);
   }, []);
 
+  const closeLibraryListCustomerAssignModal = useCallback(() => {
+    setLibraryListCustomerAssignRef(null);
+  }, []);
+
+  const onLibraryListCustomerAssignConfirm = useCallback(
+    (customerId: string) => {
+      setLibraryListCustomerAssignRef((prev) => {
+        if (prev && sessionUserId) {
+          void (async () => {
+            try {
+              await setPlaylistCustomerAssignmentRequest({
+                customerId,
+                libraryOwnerUserId: sessionUserId,
+                parentSegments: prev.parentSegments,
+                fileName: prev.fileName,
+              });
+              setInfoMessage(
+                `Die Playlist „${prev.fileName}“ wurde dem Kunden zugewiesen. Er findet sie unter „Freigegebene Playlists“.`
+              );
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Kundenzuweisung fehlgeschlagen.");
+            }
+          })();
+        }
+        return null;
+      });
+    },
+    [sessionUserId]
+  );
+
   const onTransferCustomerConfirmed = useCallback(
     (customerId: string) => {
       transferCustomerIdForPendingRef.current = customerId.trim() || null;
@@ -4627,6 +4661,11 @@ export default function App() {
                       onPlaylistListTagRefresh={
                         sessionUserId ? refreshPlaylistLibraryTagsFromMp3Lists : undefined
                       }
+                      onPlaylistCustomerAssign={
+                        sessionUserId && isAdmin
+                          ? (ref) => setLibraryListCustomerAssignRef(ref)
+                          : undefined
+                      }
                     />
                   </div>
                 </>
@@ -5396,6 +5435,17 @@ export default function App() {
           open
           onClose={closeTransferCustomerModal}
           onConfirm={onTransferCustomerConfirmed}
+        />
+      )}
+
+      {libraryListCustomerAssignRef !== null && isAdmin && (
+        <TransferCustomerModal
+          open={libraryListCustomerAssignRef !== null}
+          onClose={closeLibraryListCustomerAssignModal}
+          onConfirm={onLibraryListCustomerAssignConfirm}
+          title="Kundenzuweisung"
+          intro="Die ausgewählte .list wird dem Kunden zugewiesen. Er sieht sie in der freigegebenen Playlist-Ansicht und kann sie öffnen. War die Datei bereits einem anderen Kunden zugewiesen, wird diese Zuweisung ersetzt."
+          confirmButtonLabel="Zuweisen"
         />
       )}
 

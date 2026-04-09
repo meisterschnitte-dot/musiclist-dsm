@@ -7,6 +7,10 @@ import {
   registerPlaylistPending,
 } from "./customerPlaylistPendingFs";
 import {
+  registerPlaylistAssignmentForCustomer,
+  removePlaylistAssignmentForAllCustomers,
+} from "./customerPlaylistAssignmentsFs";
+import {
   readCustomersDb,
   writeCustomersDb,
   normalizeCustomer,
@@ -111,6 +115,31 @@ export function createCustomersRouter(): Router {
     } catch (e) {
       console.error("[playlist-pending register]", e);
       res.status(500).json({ error: "Vormerkung konnte nicht gespeichert werden." });
+    }
+  });
+
+  /**
+   * Admin: .list exklusiv einem Kunden zuweisen (freigegebene Ansicht) — ersetzt frühere Zuweisung derselben Datei.
+   * Setzt zusätzlich die Vormerkung für den Playlist-Mail-Dialog.
+   */
+  r.post("/playlist-assignment/set", bearerAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const customerId = typeof req.body?.customerId === "string" ? req.body.customerId.trim() : "";
+      const ref = parsePlaylistLibraryRefBody(req.body);
+      if (!customerId || !ref) {
+        res.status(400).json({
+          error:
+            "customerId und Bibliotheksreferenz (libraryOwnerUserId, parentSegments, fileName) sind erforderlich.",
+        });
+        return;
+      }
+      await removePlaylistAssignmentForAllCustomers(ref);
+      await registerPlaylistAssignmentForCustomer(customerId, ref);
+      await registerPlaylistPending(customerId, ref);
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[playlist-assignment set]", e);
+      res.status(500).json({ error: "Kundenzuweisung konnte nicht gespeichert werden." });
     }
   });
 

@@ -95,6 +95,8 @@ type Props = {
    * Mehrfachauswahl: Klick auf .list markiert; Strg/Cmd+Klick ergänzt. Kontextmenü auf einer markierten Datei wendet auf alle Markierungen zu.
    */
   onPlaylistListTagRefresh?: (files: EdlLibraryFileRef[]) => void | Promise<void>;
+  /** Nur Admin: .list nachträglich einem Kunden zuweisen (freigegebene Ansicht). */
+  onPlaylistCustomerAssign?: (file: EdlLibraryFileRef) => void;
 };
 
 export function EdlLibraryPanel({
@@ -118,6 +120,7 @@ export function EdlLibraryPanel({
   activeLibraryFile = null,
   readOnly = false,
   onPlaylistListTagRefresh,
+  onPlaylistCustomerAssign,
 }: Props) {
   const [cache, setCache] = useState<Record<string, EdlDirEntry[] | undefined>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -1149,6 +1152,26 @@ export function EdlLibraryPanel({
                   }).length;
                   return selectedPlaylistFileKeys.has(ctxKey) && n > 1 ? ` (${n} Listen)` : "";
                 })()}
+              </button>
+            ) : null}
+            {contextMenu.kind === "file" &&
+            !readOnly &&
+            onPlaylistCustomerAssign &&
+            isPlaylistLibraryFileName(contextMenu.name) ? (
+              <button
+                type="button"
+                className="edl-ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  const m = contextMenu;
+                  setContextMenu(null);
+                  onPlaylistCustomerAssign({
+                    parentSegments: m.parentSegments,
+                    fileName: m.name,
+                  });
+                }}
+              >
+                Kundenzuweisung …
               </button>
             ) : null}
             <button

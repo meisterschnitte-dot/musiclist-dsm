@@ -28,6 +28,28 @@ export async function registerPlaylistPendingRequest(params: {
   if (!res.ok) throw new Error(await parseError(res));
 }
 
+/** Admin: .list einem Kunden zuweisen (freigegebene Ansicht); vorherige Zuweisung derselben Datei wird ersetzt. */
+export async function setPlaylistCustomerAssignmentRequest(params: {
+  customerId: string;
+  libraryOwnerUserId: string;
+  parentSegments: string[];
+  fileName: string;
+}): Promise<void> {
+  const t = getUsersApiToken();
+  if (!t) throw new Error("Nicht angemeldet.");
+  const res = await fetch(`${API}/playlist-assignment/set`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      customerId: params.customerId.trim(),
+      libraryOwnerUserId: params.libraryOwnerUserId.trim(),
+      parentSegments: params.parentSegments,
+      fileName: params.fileName.trim(),
+    }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+}
+
 export async function lookupPlaylistPendingCustomerRequest(params: {
   libraryOwnerUserId: string;
   parentSegments: string[];
