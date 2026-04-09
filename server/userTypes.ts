@@ -13,7 +13,7 @@ export type StoredUser = {
   legacyLoginName?: string;
   /** Optional: Anzeigename der Firma (Kundenrolle); Verknüpfung zu Kundenverwaltung. */
   companyName?: string;
-  /** Verweis auf Eintrag in `customers.json` — alle Logins dieses Kunden teilen dieselben Playlists. */
+  /** Verweis auf `customers.json` — freigegebene Playlisten nur, wenn `email` noch in der Kundenliste steht. */
   customerId?: string;
   /** Fehlt in älteren JSON-Dateien: gilt als aktiv. */
   active?: boolean;

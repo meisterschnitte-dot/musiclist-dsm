@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { bearerAuth, requireCustomerRole } from "./authMiddleware";
+import { isUserEmailInCustomerDirectory } from "./customersFs";
 import {
   getAssignmentsForCustomer,
   removePlaylistAssignmentForCustomer,
@@ -11,6 +12,35 @@ import {
   readUserEdlFileBuffer,
   readUserEdlFileText,
 } from "./userEdlFs";
+
+type CustomerEdlAccess =
+  | { ok: false; mode: "no_customer" }
+  | { ok: false; mode: "email_not_in_customer_list" }
+  | { ok: true; customerId: string; assignments: PlaylistLibraryRef[] };
+
+async function resolveCustomerEdlAccess(req: Request): Promise<CustomerEdlAccess> {
+  const u = req.authUser!;
+  const customerId = u.customerId?.trim() ?? "";
+  if (!customerId) return { ok: false, mode: "no_customer" };
+  const allowed = await isUserEmailInCustomerDirectory(customerId, u.email);
+  if (!allowed) return { ok: false, mode: "email_not_in_customer_list" };
+  const assignments = await getAssignmentsForCustomer(customerId);
+  return { ok: true, customerId, assignments };
+}
+
+function respondCustomerEdlForbidden(
+  res: Response,
+  mode: Exclude<CustomerEdlAccess, { ok: true }>["mode"]
+): void {
+  if (mode === "no_customer") {
+    res.status(403).json({ error: "Kein Kunde zugeordnet." });
+    return;
+  }
+  res.status(403).json({
+    error:
+      "Kein Zugriff: Diese E-Mail-Adresse ist der Kundenliste nicht zugeordnet. Bitte Administrator kontaktieren.",
+  });
+}
 
 function segmentsBody(body: unknown): string[] {
   if (!body || typeof body !== "object") return [];
@@ -73,12 +103,12 @@ export function createCustomerEdlRouter(): Router {
 
   r.post("/customer/edl/list", bearerAuth, requireCustomerRole, async (req: Request, res: Response) => {
     try {
-      const customerId = req.authUser!.customerId?.trim();
-      if (!customerId) {
+      const access = await resolveCustomerEdlAccess(req);
+      if (!access.ok) {
         res.json({ entries: [] });
         return;
       }
-      const assignments = await getAssignmentsForCustomer(customerId);
+      const { assignments } = access;
       const segments = segmentsBody(req.body);
 
       if (segments.length === 0) {
@@ -105,12 +135,12 @@ export function createCustomerEdlRouter(): Router {
 
   r.post("/customer/edl/read-text", bearerAuth, requireCustomerRole, async (req: Request, res: Response) => {
     try {
-      const customerId = req.authUser!.customerId?.trim();
-      if (!customerId) {
-        res.status(403).json({ error: "Kein Kunde zugeordnet." });
+      const access = await resolveCustomerEdlAccess(req);
+      if (!access.ok) {
+        respondCustomerEdlForbidden(res, access.mode);
         return;
       }
-      const assignments = await getAssignmentsForCustomer(customerId);
+      const { customerId, assignments } = access;
       const segments = segmentsBody(req.body);
       const fileName = typeof req.body?.fileName === "string" ? req.body.fileName : "";
       if (segments.length < 1 || !fileName) {
@@ -132,12 +162,12 @@ export function createCustomerEdlRouter(): Router {
 
   r.post("/customer/edl/read-binary", bearerAuth, requireCustomerRole, async (req: Request, res: Response) => {
     try {
-      const customerId = req.authUser!.customerId?.trim();
-      if (!customerId) {
-        res.status(403).json({ error: "Kein Kunde zugeordnet." });
+      const access = await resolveCustomerEdlAccess(req);
+      if (!access.ok) {
+        respondCustomerEdlForbidden(res, access.mode);
         return;
       }
-      const assignments = await getAssignmentsForCustomer(customerId);
+      const { customerId, assignments } = access;
       const segments = segmentsBody(req.body);
       const fileName = typeof req.body?.fileName === "string" ? req.body.fileName : "";
       if (segments.length < 1 || !fileName) {
@@ -159,12 +189,12 @@ export function createCustomerEdlRouter(): Router {
 
   r.post("/customer/edl/delete-file", bearerAuth, requireCustomerRole, async (req: Request, res: Response) => {
     try {
-      const customerId = req.authUser!.customerId?.trim();
-      if (!customerId) {
-        res.status(403).json({ error: "Kein Kunde zugeordnet." });
+      const access = await resolveCustomerEdlAccess(req);
+      if (!access.ok) {
+        respondCustomerEdlForbidden(res, access.mode);
         return;
       }
-      const assignments = await getAssignmentsForCustomer(customerId);
+      const { customerId, assignments } = access;
       const segments = segmentsBody(req.body);
       const fileName = typeof req.body?.fileName === "string" ? req.body.fileName.trim() : "";
       if (segments.length < 1 || !fileName) {

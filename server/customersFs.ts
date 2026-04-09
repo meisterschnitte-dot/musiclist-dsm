@@ -96,4 +96,34 @@ export async function writeCustomersDb(db: CustomersDb): Promise<void> {
   });
 }
 
+/**
+ * Liegt die E-Mail in der Kunden-Hauptliste oder in einer Gruppe (gleiche Normalisierung wie in der Verwaltung).
+ * Freigegebene Playlisten nur, wenn diese Prüfung für den eingeloggten Benutzer zutrifft.
+ */
+export function customerRecordIncludesUserEmail(customer: CustomerRecord, rawEmail: string): boolean {
+  const n = normalizeEmail(rawEmail);
+  if (!n) return false;
+  for (const e of customer.emails) {
+    if (normalizeEmail(e) === n) return true;
+  }
+  for (const g of customer.groups) {
+    for (const e of g.emails) {
+      if (normalizeEmail(e) === n) return true;
+    }
+  }
+  return false;
+}
+
+export async function isUserEmailInCustomerDirectory(
+  customerId: string,
+  rawEmail: string
+): Promise<boolean> {
+  const id = customerId.trim();
+  if (!id) return false;
+  const db = await readCustomersDb();
+  const c = db.customers.find((x) => x.id === id);
+  if (!c) return false;
+  return customerRecordIncludesUserEmail(c, rawEmail);
+}
+
 export { normalizeEmail, plausibleEmail, normalizeCustomer };
