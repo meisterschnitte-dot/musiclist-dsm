@@ -8,6 +8,7 @@ import {
   apiEdlReadBinary,
   apiEdlReadText,
   apiEdlRenameDirectory,
+  apiEdlRenameFile,
   apiEdlWriteBinary,
   apiEdlWriteText,
 } from "../api/userEdlLibraryApi";
@@ -34,5 +35,7 @@ export function createServerEdlLibraryAccess(): EdlLibraryAccess {
     deleteDirectory: (pathSegments) => apiEdlDeleteDirectory(pathSegments),
     renameDirectory: (parentSegments, oldName, newName) =>
       apiEdlRenameDirectory(parentSegments, oldName, newName),
+    renameFile: (parentSegments, oldName, newName) =>
+      apiEdlRenameFile(parentSegments, oldName, newName),
   };
 }

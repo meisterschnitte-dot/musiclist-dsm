@@ -1829,6 +1829,23 @@ export default function App() {
     [remapEdlPathsAfterFolderRelocate]
   );
 
+  const onEdlFileRenamed = useCallback(
+    (parentSegments: string[], oldFileName: string, newFileName: string) => {
+      setLoadedLibraryFile((lf) => {
+        if (!lf) return null;
+        if (
+          lf.fileName === oldFileName &&
+          lf.parentSegments.length === parentSegments.length &&
+          lf.parentSegments.every((s, i) => s === parentSegments[i])
+        ) {
+          return { ...lf, fileName: newFileName };
+        }
+        return lf;
+      });
+    },
+    []
+  );
+
   const onEdlFolderMoved = useCallback(
     (fromParentSegments: string[], folderName: string, toParentSegments: string[]) => {
       remapEdlPathsAfterFolderRelocate(
@@ -4648,6 +4665,7 @@ export default function App() {
                       importGemaXlsTitle={IMPORT_XLS_TOOLTIP}
                       importGemaXlsDisabled={!!importOverlay}
                       onEdlFolderRenamed={onEdlFolderRenamed}
+                      onEdlFileRenamed={onEdlFileRenamed}
                       onEdlFolderMoved={onEdlFolderMoved}
                       readOnly={isCustomerUser}
                       activeLibraryFile={

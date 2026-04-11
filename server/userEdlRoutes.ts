@@ -1,7 +1,10 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { bearerAuth } from "./authMiddleware";
-import { getPlaylistFileNamesToCustomerNames } from "./customerPlaylistAssignmentsFs";
+import {
+  getPlaylistFileNamesToCustomerNames,
+  renamePlaylistAssignmentsFileName,
+} from "./customerPlaylistAssignmentsFs";
 import {
   deleteUserEdlDirectory,
   deleteUserEdlFile,
@@ -13,6 +16,7 @@ import {
   moveUserEdlFile,
   readUserEdlFileBuffer,
   readUserEdlFileText,
+  renameUserEdlFile,
   renameUserEdlSubdirectory,
   writeUserEdlFileBuffer,
   writeUserEdlFileText,
@@ -233,6 +237,27 @@ export function createUserEdlRouter(): Router {
         return;
       }
       await renameUserEdlSubdirectory(uid, parentSegments, oldName, newName);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : "Umbenennen fehlgeschlagen." });
+    }
+  });
+
+  r.post("/me/edl/rename-file", async (req: Request, res: Response) => {
+    try {
+      const uid = req.authUser!.id;
+      const segments = segmentsBody(req.body);
+      const oldName = typeof req.body?.oldName === "string" ? req.body.oldName : "";
+      const newName = typeof req.body?.newName === "string" ? req.body.newName : "";
+      if (!oldName || !newName) {
+        res.status(400).json({ error: "oldName und newName sind erforderlich." });
+        return;
+      }
+      await renameUserEdlFile(uid, segments, oldName, newName);
+      const finalName = newName.trim().replace(/[/\\]/g, "");
+      if (isPlaylistLibraryFileName(finalName)) {
+        await renamePlaylistAssignmentsFileName(uid, segments, oldName, finalName);
+      }
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : "Umbenennen fehlgeschlagen." });

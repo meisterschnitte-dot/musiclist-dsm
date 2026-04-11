@@ -1554,6 +1554,15 @@ body {
   overflow: hidden;
 }
 
+.playlist-timeline:focus {
+  outline: none;
+}
+
+.playlist-timeline:focus-visible {
+  outline: 2px solid var(--app-focus);
+  outline-offset: 2px;
+}
+
 .playlist-timeline__toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -4952,6 +4961,13 @@ html[data-theme="light"] .playlist-timeline__toolbar-sep {
 }
 
 html[data-theme="light"] .playlist-timeline__origin-input {
+  color: #000000;
+}
+
+html[data-theme="light"] .playlist-timeline__ruler-label,
+html[data-theme="light"] .playlist-timeline__lane-label,
+html[data-theme="light"] .playlist-timeline__clip-label,
+html[data-theme="light"] .playlist-timeline__empty {
   color: #000000;
 }
 

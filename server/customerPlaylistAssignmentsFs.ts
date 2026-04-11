@@ -144,6 +144,29 @@ export async function removePlaylistAssignmentForCustomer(
 /**
  * Für den EDL-Browser: pro .list-Dateiname der Kundenname, falls dieser Pfad einem Kunden zugewiesen ist.
  */
+/** Nach Umbenennen einer Bibliotheks-Playlist: Zuweisungen auf neuen Dateinamen zeigen. */
+export async function renamePlaylistAssignmentsFileName(
+  libraryOwnerUserId: string,
+  parentSegments: string[],
+  oldFileName: string,
+  newFileName: string
+): Promise<void> {
+  if (oldFileName === newFileName) return;
+  const db = await readAssignmentsDb();
+  const oldKey = refKey({ libraryOwnerUserId, parentSegments, fileName: oldFileName });
+  let changed = false;
+  for (const cid of Object.keys(db.byCustomer)) {
+    const list = db.byCustomer[cid]!;
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i]!;
+      if (refKey(r) !== oldKey) continue;
+      list[i] = { ...r, fileName: newFileName };
+      changed = true;
+    }
+  }
+  if (changed) await writeAssignmentsDb(db);
+}
+
 export async function getPlaylistFileNamesToCustomerNames(
   libraryOwnerUserId: string,
   parentSegments: string[],

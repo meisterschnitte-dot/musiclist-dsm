@@ -82,6 +82,18 @@ export function framesToTimecode(frames: number, fps: number = DEFAULT_FPS): str
 }
 
 /**
+ * Vorschlag für den Start-TC der Playlist-Timeline: **Stunde** wie beim ersten Eintrag (`recIn`),
+ * dabei immer `HH:00:00:00` (Minuten, Sekunden und Frames auf null).
+ */
+export function suggestedTimelineOriginFromFirstRecIn(recInFrames: number, fps: number = DEFAULT_FPS): number {
+  const f = normalizeFramesToDay(recInFrames, fps);
+  const totalSeconds = Math.floor(f / fps);
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const hh = Math.floor(totalMinutes / 60) % 24;
+  return (hh * 60 * 60 * fps) | 0;
+}
+
+/**
  * Zeitspanne (Dauer) ohne Tagesumbruch — Stunden können 24 überschreiten; pro Sekunde Frames 0…fps−1.
  */
 export function framesToTimecodeDuration(frames: number, fps: number = DEFAULT_FPS): string {

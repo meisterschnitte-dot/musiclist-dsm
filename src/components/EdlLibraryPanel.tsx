@@ -80,6 +80,12 @@ type Props = {
     oldFolderName: string,
     newFolderName: string
   ) => void;
+  /** Nach Umbenennen einer Bibliotheksdatei (z. B. `.list`): geöffnete Datei anpassen. */
+  onEdlFileRenamed?: (
+    parentSegments: string[],
+    oldFileName: string,
+    newFileName: string
+  ) => void;
   /** Nach Verschieben eines Ordners: Import-Ziel und geöffnete Datei anpassen. */
   onEdlFolderMoved?: (
     fromParentSegments: string[],
@@ -116,6 +122,7 @@ export function EdlLibraryPanel({
   importGemaXlsTitle,
   importGemaXlsDisabled = false,
   onEdlFolderRenamed,
+  onEdlFileRenamed,
   onEdlFolderMoved,
   activeLibraryFile = null,
   readOnly = false,
@@ -138,6 +145,12 @@ export function EdlLibraryPanel({
   } | null>(null);
   const [renameFolderNewName, setRenameFolderNewName] = useState("");
   const renameFolderInputRef = useRef<HTMLInputElement>(null);
+  const [renamePlaylistCtx, setRenamePlaylistCtx] = useState<{
+    parentSegments: string[];
+    oldName: string;
+  } | null>(null);
+  const [renamePlaylistNewName, setRenamePlaylistNewName] = useState("");
+  const renamePlaylistInputRef = useRef<HTMLInputElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   /** Mehrfachauswahl nur für `.list` / `.egpl` — Schlüssel `edlLibraryFileRefKey`. */
   const [selectedPlaylistFileKeys, setSelectedPlaylistFileKeys] = useState<Set<string>>(() => new Set());
@@ -440,6 +453,64 @@ export function EdlLibraryPanel({
       setBusy(false);
     }
   }, [library, renameFolderCtx, renameFolderNewName, onEdlFolderRenamed, onLibraryChange]);
+
+  useEffect(() => {
+    if (!renamePlaylistCtx) return;
+    const id = requestAnimationFrame(() => {
+      renamePlaylistInputRef.current?.focus();
+      renamePlaylistInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [renamePlaylistCtx]);
+
+  useEffect(() => {
+    if (!renamePlaylistCtx) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setRenamePlaylistCtx(null);
+        setRenamePlaylistNewName("");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [renamePlaylistCtx]);
+
+  const submitRenamePlaylist = useCallback(async () => {
+    if (!library || !renamePlaylistCtx) return;
+    const { parentSegments, oldName } = renamePlaylistCtx;
+    const name = renamePlaylistNewName.trim().replace(/[/\\]/g, "");
+    if (!name) {
+      setListErr("Bitte einen Dateinamen eingeben.");
+      return;
+    }
+    if (name === oldName) {
+      setRenamePlaylistCtx(null);
+      setRenamePlaylistNewName("");
+      return;
+    }
+    setBusy(true);
+    setListErr(null);
+    try {
+      await library.renameFile(parentSegments, oldName, name);
+      const oldKey = edlLibraryFileRefKey({ parentSegments, fileName: oldName });
+      const newKey = edlLibraryFileRefKey({ parentSegments, fileName: name });
+      setSelectedPlaylistFileKeys((prev) => {
+        if (!prev.has(oldKey)) return prev;
+        const next = new Set(prev);
+        next.delete(oldKey);
+        next.add(newKey);
+        return next;
+      });
+      onEdlFileRenamed?.(parentSegments, oldName, name);
+      setRenamePlaylistCtx(null);
+      setRenamePlaylistNewName("");
+      onLibraryChange?.();
+    } catch (e) {
+      setListErr(e instanceof Error ? e.message : "Umbenennen fehlgeschlagen.");
+    } finally {
+      setBusy(false);
+    }
+  }, [library, renamePlaylistCtx, renamePlaylistNewName, onEdlFileRenamed, onLibraryChange]);
 
   const handleFileDragStart = useCallback(
     (parentSegments: string[], fileName: string) => (e: DragEvent) => {
@@ -1104,6 +1175,24 @@ export function EdlLibraryPanel({
                 Umbenennen …
               </button>
             ) : null}
+            {contextMenu.kind === "file" && !readOnly && isPlaylistLibraryFileName(contextMenu.name) ? (
+              <button
+                type="button"
+                className="edl-ctx-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  const m = contextMenu;
+                  setContextMenu(null);
+                  setRenamePlaylistCtx({
+                    parentSegments: m.parentSegments,
+                    oldName: m.name,
+                  });
+                  setRenamePlaylistNewName(m.name);
+                }}
+              >
+                Umbenennen …
+              </button>
+            ) : null}
             {contextMenu.kind === "file" &&
             onPlaylistListTagRefresh &&
             !readOnly &&
@@ -1289,6 +1378,63 @@ export function EdlLibraryPanel({
                   onClick={() => {
                     setRenameFolderCtx(null);
                     setRenameFolderNewName("");
+                  }}
+                >
+                  Abbrechen
+                </button>
+                <button type="submit" className="btn-modal primary" disabled={busy}>
+                  Umbenennen
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {renamePlaylistCtx && (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edl-rename-playlist-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
+              setRenamePlaylistCtx(null);
+              setRenamePlaylistNewName("");
+            }
+          }}
+        >
+          <div className="modal modal--new-folder" onMouseDown={(e) => e.stopPropagation()}>
+            <h2 id="edl-rename-playlist-title" className="modal-title">
+              Liste umbenennen
+            </h2>
+            <p className="modal-lead">
+              Datei „{renamePlaylistCtx.oldName}“ — neuer Name im gleichen Ordner (Endung beibehalten).
+            </p>
+            <form
+              className="edl-new-folder-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitRenamePlaylist();
+              }}
+            >
+              <label className="tag-field">
+                <span>Neuer Dateiname</span>
+                <input
+                  ref={renamePlaylistInputRef}
+                  type="text"
+                  value={renamePlaylistNewName}
+                  onChange={(e) => setRenamePlaylistNewName(e.target.value)}
+                  autoComplete="off"
+                  required
+                />
+              </label>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-modal"
+                  onClick={() => {
+                    setRenamePlaylistCtx(null);
+                    setRenamePlaylistNewName("");
                   }}
                 >
                   Abbrechen

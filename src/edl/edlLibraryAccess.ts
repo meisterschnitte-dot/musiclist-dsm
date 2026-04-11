@@ -28,6 +28,8 @@ export type EdlLibraryAccess = {
   deleteFile(segments: string[], fileName: string): Promise<void>;
   deleteDirectory(pathSegments: string[]): Promise<void>;
   renameDirectory(parentSegments: string[], oldName: string, newName: string): Promise<void>;
+  /** Datei im gleichen Ordner umbenennen (z. B. gespeicherte `.list`). */
+  renameFile(parentSegments: string[], oldName: string, newName: string): Promise<void>;
   /** Vor interaktivem Neu-Laden (z. B. Berechtigung) — Server: immer ok wenn angemeldet. */
   ensureWritableInteractive?(): Promise<boolean>;
 };

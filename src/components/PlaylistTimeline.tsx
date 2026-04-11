@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { PlaylistEntry } from "../edl/types";
 import { basenamePath } from "../tracks/sanitizeFilename";
 import {
@@ -39,6 +47,31 @@ function zoomFromSliderT(t: number): number {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n));
+}
+
+/** Pfeil hoch/runter für Timeline-Zoom nicht abfangen, wenn Fokus in Eingaben oder Slidern liegt. */
+function shouldIgnoreTimelineArrowZoom(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return true;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "textarea" || tag === "select" || tag === "button" || tag === "a") return true;
+  if (el.isContentEditable) return true;
+  if (el.closest('[role="slider"]')) return true;
+  if (tag === "input") {
+    const t = ((el as HTMLInputElement).type || "").toLowerCase();
+    return (
+      t === "text" ||
+      t === "search" ||
+      t === "password" ||
+      t === "email" ||
+      t === "url" ||
+      t === "tel" ||
+      t === "number" ||
+      t === "range" ||
+      t === ""
+    );
+  }
+  return false;
 }
 
 function clipLabel(row: PlaylistEntry): string {
@@ -138,6 +171,7 @@ export function PlaylistTimeline({
   const [originDraft, setOriginDraft] = useState(() =>
     framesToTimecode(Math.max(0, originFrames), fps)
   );
+  const timelineRootRef = useRef<HTMLDivElement>(null);
   /** Nur vertikal (Scrollbar sichtbar). */
   const scrollOuterRef = useRef<HTMLDivElement>(null);
   /** Nur horizontal — ohne native horizontale Scrollbar (nur untere Leiste). */
@@ -147,13 +181,15 @@ export function PlaylistTimeline({
   const zoomBarTrackRef = useRef<HTMLDivElement>(null);
   const [zoomBarW, setZoomBarW] = useState(0);
   const pendingZoomAdjustRef = useRef<PendingZoomAdjust | null>(null);
+  /** Nächstes Zoomen: Playhead in die Mitte des sichtbaren Bereichs (danach klassische Zoom-Verfolgung). */
+  const firstZoomCenterPendingRef = useRef(true);
   const [scrollMetrics, setScrollMetrics] = useState({
     sl: 0,
     sw: 0,
     cw: 0,
     tw: 0,
   });
-  const playheadFramesRef = useRef(playheadFrames);
+  const playheadFramesRef = useRef<number>(0);
   const rangeRef = useRef({ originFrames: 0, span: 1, fps: DEFAULT_FPS });
 
   useEffect(() => {
@@ -184,6 +220,14 @@ export function PlaylistTimeline({
       tw,
     });
   }, []);
+
+  /** Ohne Video: linke Position = Start-TC; sonst Programmposition aus dem Player. */
+  const effectivePlayheadFrames = useMemo(() => {
+    if (playheadFrames != null) {
+      return normalizeFramesToDay(playheadFrames, fps);
+    }
+    return normalizeFramesToDay(Math.max(0, originFrames), fps);
+  }, [playheadFrames, originFrames, fps]);
 
   const {
     span,
@@ -243,26 +287,21 @@ export function PlaylistTimeline({
       };
     });
 
-    let playheadLeftPct: number | null = null;
-    let phOff: number | null = null;
-    if (playheadFrames != null) {
-      phOff = offsetFromOriginFrame(playheadFrames, o, fps);
-      playheadLeftPct = clamp((phOff / spanVal) * 100, 0, 100);
-    }
+    const phOff = offsetFromOriginFrame(effectivePlayheadFrames, o, fps);
+    const playheadLeftPctVal = clamp((phOff / spanVal) * 100, 0, 100);
 
     return {
       span: spanVal,
       clips: clipItems,
       rulerTicks,
-      playheadLeftPct,
+      playheadLeftPct: playheadLeftPctVal,
       playheadOffsetFromOrigin: phOff,
     };
-  }, [playlist, fps, originFrames, playheadFrames]);
+  }, [playlist, fps, originFrames, effectivePlayheadFrames]);
 
   const playheadTcDisplay = useMemo(() => {
-    if (playheadFrames == null) return "—";
-    return framesToTimecode(normalizeFramesToDay(playheadFrames, fps), fps);
-  }, [playheadFrames, fps]);
+    return framesToTimecode(effectivePlayheadFrames, fps);
+  }, [effectivePlayheadFrames, fps]);
 
   const endTcDisplay = useMemo(() => {
     if (
@@ -281,7 +320,7 @@ export function PlaylistTimeline({
   const ensurePlayheadVisible = useCallback(() => {
     const se = scrollRef.current;
     const ie = innerRef.current;
-    if (!se || !ie || playheadOffsetFromOrigin == null) return;
+    if (!se || !ie) return;
     if (span <= 0) return;
     const iw = ie.scrollWidth;
     const cw = se.clientWidth;
@@ -298,7 +337,7 @@ export function PlaylistTimeline({
     }
   }, [playheadOffsetFromOrigin, span]);
 
-  playheadFramesRef.current = playheadFrames;
+  playheadFramesRef.current = effectivePlayheadFrames;
   rangeRef.current = { originFrames: Math.max(0, originFrames), span, fps };
 
   const queueZoomAdjust = useCallback(() => {
@@ -306,20 +345,43 @@ export function PlaylistTimeline({
     const ie = innerRef.current;
     if (!se || !ie) return;
     const o = Math.max(0, originFrames);
-    const off =
-      playheadFrames != null ? offsetFromOriginFrame(playheadFrames, o, fps) : null;
+    const off = offsetFromOriginFrame(effectivePlayheadFrames, o, fps);
     pendingZoomAdjustRef.current = {
       oldIw: ie.scrollWidth,
       oldSl: se.scrollLeft,
-      playheadFrames,
+      playheadFrames: effectivePlayheadFrames,
       playheadOffsetFromOrigin: off,
       span,
     };
-  }, [playheadFrames, originFrames, fps, span]);
+  }, [effectivePlayheadFrames, originFrames, fps, span]);
 
   const resetZoom = useCallback(() => {
+    firstZoomCenterPendingRef.current = true;
     queueZoomAdjust();
     setZoom(1);
+  }, [queueZoomAdjust]);
+
+  const onTimelinePointerDownCapture = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const el = e.target as HTMLElement;
+    if (el.closest("input, textarea, button, select, a")) return;
+    if (el.closest('[role="slider"]')) return;
+    e.currentTarget.focus();
+  }, []);
+
+  useEffect(() => {
+    const root = timelineRootRef.current;
+    if (!root) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      if (!root.contains(document.activeElement)) return;
+      if (shouldIgnoreTimelineArrowZoom(document.activeElement)) return;
+      e.preventDefault();
+      queueZoomAdjust();
+      const factor = e.key === "ArrowUp" ? ZOOM_STEP : 1 / ZOOM_STEP;
+      setZoom((z) => clamp(Number((z * factor).toFixed(4)), ZOOM_MIN, ZOOM_MAX));
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [queueZoomAdjust]);
 
   useLayoutEffect(() => {
@@ -336,8 +398,14 @@ export function PlaylistTimeline({
 
     if (p.playheadOffsetFromOrigin != null && p.span > 0) {
       const frac = p.playheadOffsetFromOrigin / p.span;
-      const nextSl = p.oldSl + frac * (newIw - p.oldIw);
-      se.scrollLeft = clamp(nextSl, 0, maxSl);
+      if (firstZoomCenterPendingRef.current) {
+        firstZoomCenterPendingRef.current = false;
+        const playheadPx = frac * newIw;
+        se.scrollLeft = clamp(playheadPx - clientW / 2, 0, maxSl);
+      } else {
+        const nextSl = p.oldSl + frac * (newIw - p.oldIw);
+        se.scrollLeft = clamp(nextSl, 0, maxSl);
+      }
     } else {
       const ratio = p.oldIw > 0 ? newIw / p.oldIw : 1;
       se.scrollLeft = clamp(p.oldSl * ratio, 0, maxSl);
@@ -346,9 +414,14 @@ export function PlaylistTimeline({
   }, [zoom, refreshScrollMetrics]);
 
   useLayoutEffect(() => {
+    firstZoomCenterPendingRef.current = true;
     const se = scrollRef.current;
     if (se) se.scrollLeft = 0;
   }, [originFrames]);
+
+  useEffect(() => {
+    firstZoomCenterPendingRef.current = true;
+  }, [playlistDocumentTitle]);
 
   useLayoutEffect(() => {
     ensurePlayheadVisible();
@@ -391,7 +464,6 @@ export function PlaylistTimeline({
     const se = scrollRef.current;
     if (!se) return;
     const ro = new ResizeObserver(() => {
-      if (playheadOffsetFromOrigin == null) return;
       requestAnimationFrame(() => ensurePlayheadVisible());
     });
     ro.observe(se);
@@ -409,7 +481,7 @@ export function PlaylistTimeline({
       if (!ie) return;
       const { originFrames: o, span: sp, fps: fp } = rangeRef.current;
       const ph = playheadFramesRef.current;
-      const off = ph != null ? offsetFromOriginFrame(ph, o, fp) : null;
+      const off = offsetFromOriginFrame(ph, o, fp);
       pendingZoomAdjustRef.current = {
         oldIw: ie.scrollWidth,
         oldSl: el.scrollLeft,
@@ -587,7 +659,14 @@ export function PlaylistTimeline({
   );
 
   return (
-    <div className="playlist-timeline" aria-label="Playlist-Timeline">
+    <div
+      ref={timelineRootRef}
+      tabIndex={0}
+      className="playlist-timeline"
+      aria-label="Playlist-Timeline"
+      title="Klick in die Timeline: Fokus · Pfeil ↑/↓ oder Strg+Mausrad: Zoom (erstes Zoomen zentriert den Standanzeiger)"
+      onPointerDownCapture={onTimelinePointerDownCapture}
+    >
       <div className="playlist-timeline__toolbar">
         <div className="playlist-timeline__toolbar-left">
           <span className="playlist-timeline__toolbar-label">Start-TC</span>
@@ -705,10 +784,11 @@ export function PlaylistTimeline({
                   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
                   e.preventDefault();
                   const step = Math.max(1, Math.floor(span / 200));
-                  const baseOff =
-                    playheadFrames != null
-                      ? offsetFromOriginFrame(playheadFrames, Math.max(0, originFrames), fps)
-                      : span / 2;
+                  const baseOff = offsetFromOriginFrame(
+                    effectivePlayheadFrames,
+                    Math.max(0, originFrames),
+                    fps
+                  );
                   const nextOff = clamp(
                     e.key === "ArrowLeft" ? baseOff - step : baseOff + step,
                     0,
@@ -718,13 +798,11 @@ export function PlaylistTimeline({
                 }}
               />
             ) : null}
-            {playheadLeftPct != null ? (
-              <div
-                className="playlist-timeline__playhead"
-                style={{ left: `${playheadLeftPct}%` }}
-                aria-hidden
-              />
-            ) : null}
+            <div
+              className="playlist-timeline__playhead"
+              style={{ left: `${playheadLeftPct}%` }}
+              aria-hidden
+            />
           </div>
             </div>
           </div>

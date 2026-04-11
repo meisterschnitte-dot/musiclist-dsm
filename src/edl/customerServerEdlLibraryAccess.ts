@@ -27,5 +27,6 @@ export function createCustomerServerEdlLibraryAccess(): EdlLibraryAccess {
     moveDirectory: ro,
     deleteDirectory: ro,
     renameDirectory: ro,
+    renameFile: ro,
   };
 }

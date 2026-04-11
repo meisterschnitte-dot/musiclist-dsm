@@ -149,3 +149,16 @@ export async function apiEdlRenameDirectory(
   });
   if (!res.ok) throw new Error(await parseError(res));
 }
+
+export async function apiEdlRenameFile(
+  segments: string[],
+  oldName: string,
+  newName: string
+): Promise<void> {
+  const res = await fetch(`${API}/me/edl/rename-file`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ segments, oldName, newName }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+}

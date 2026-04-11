@@ -8,7 +8,12 @@ import {
   type DragEvent,
 } from "react";
 import type { PlaylistEntry } from "../edl/types";
-import { DEFAULT_FPS, offsetFromOriginFrame } from "../edl/timecode";
+import {
+  DEFAULT_FPS,
+  normalizeFramesToDay,
+  offsetFromOriginFrame,
+  suggestedTimelineOriginFromFirstRecIn,
+} from "../edl/timecode";
 import { basenamePath } from "../tracks/sanitizeFilename";
 import { DEFAULT_TIMELINE_ORIGIN_FRAMES, PlaylistTimeline } from "./PlaylistTimeline";
 
@@ -100,6 +105,8 @@ export function MediaPlayerDock({
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<MediaKind>(null);
   const [originFrames, setOriginFrames] = useState(DEFAULT_TIMELINE_ORIGIN_FRAMES);
+  const playlistRef = useRef(playlist);
+  playlistRef.current = playlist;
   const [playheadFrames, setPlayheadFrames] = useState<number | null>(null);
   /** Mediendauer in Sekunden (Video: für End-TC in der Timeline bei 25 fps). */
   const [mediaDurationSec, setMediaDurationSec] = useState<number | null>(null);
@@ -107,6 +114,16 @@ export function MediaPlayerDock({
   const rowRef = useRef<HTMLDivElement | null>(null);
   const videoResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [videoSlotDragOver, setVideoSlotDragOver] = useState(false);
+
+  /** Beim Öffnen einer anderen Playlist: Start-TC = Stunde des ersten Eintrags, sonst 00:00:00. Nur bei Wechsel des Dokumenttitels, damit manuelle Eingabe erhalten bleibt. */
+  useEffect(() => {
+    const pl = playlistRef.current;
+    if (!playlistDocumentTitle || !pl?.length) {
+      setOriginFrames(DEFAULT_TIMELINE_ORIGIN_FRAMES);
+      return;
+    }
+    setOriginFrames(suggestedTimelineOriginFromFirstRecIn(pl[0]!.recInFrames, DEFAULT_FPS));
+  }, [playlistDocumentTitle]);
 
   const computeVideoSlotMaxWidth = useCallback(() => {
     const row = rowRef.current;
@@ -189,7 +206,6 @@ export function MediaPlayerDock({
   const updatePlayhead = useCallback(() => {
     const v = videoRef.current;
     if (!v || kind !== "video" || !objectUrl) {
-      setPlayheadFrames(null);
       return;
     }
     const t = v.currentTime;
@@ -206,7 +222,6 @@ export function MediaPlayerDock({
 
   useEffect(() => {
     if (kind !== "video" || !objectUrl) {
-      setPlayheadFrames(null);
       return;
     }
     const v = videoRef.current;
@@ -317,9 +332,13 @@ export function MediaPlayerDock({
 
   const seekProgramFrames = useCallback(
     (frames: number) => {
-      const v = videoRef.current;
-      if (!v || kind !== "video" || !objectUrl) return;
       const fps = DEFAULT_FPS;
+      const frNorm = normalizeFramesToDay(frames, fps);
+      const v = videoRef.current;
+      if (!v || kind !== "video" || !objectUrl) {
+        setPlayheadFrames(frNorm);
+        return;
+      }
       const matched = findPlaylistRowForFileName(playlist, label);
       let t: number;
       if (matched) {

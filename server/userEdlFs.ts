@@ -174,6 +174,37 @@ export async function moveUserEdlFile(
   await fs.rename(fromPath, toPath);
 }
 
+/** Datei im gleichen Ordner umbenennen (Endung unverändert). */
+export async function renameUserEdlFile(
+  userId: string,
+  parentSegments: string[],
+  oldName: string,
+  newName: string
+): Promise<void> {
+  assertSafeSegment(oldName);
+  const trimmed = newName.trim().replace(/[/\\]/g, "");
+  if (!trimmed) throw new Error("Ungültiger Dateiname.");
+  assertSafeSegment(trimmed);
+  if (trimmed === oldName) return;
+  if (!isEdlLibraryFileName(trimmed)) {
+    throw new Error("Nur EDL-, XLS- oder Playlist-Dateien sind erlaubt.");
+  }
+  const extOld = path.extname(oldName).toLowerCase();
+  const extNew = path.extname(trimmed).toLowerCase();
+  if (extOld !== extNew) {
+    throw new Error("Die Dateiendung darf nicht geändert werden.");
+  }
+  if (!(await isFileAt(userId, parentSegments, oldName))) {
+    throw new Error("Datei nicht gefunden.");
+  }
+  if (await nameTakenInParent(userId, parentSegments, trimmed)) {
+    throw new Error("Ein Ordner oder eine Datei mit diesem Namen existiert bereits.");
+  }
+  const from = resolveUnderEdlRoot(userId, [...parentSegments, oldName]);
+  const to = resolveUnderEdlRoot(userId, [...parentSegments, trimmed]);
+  await fs.rename(from, to);
+}
+
 /** Verschiebt einen Unterordner (`fromParent` + `folderName`) nach `toParentSegments`. */
 export async function moveUserEdlDirectory(
   userId: string,
