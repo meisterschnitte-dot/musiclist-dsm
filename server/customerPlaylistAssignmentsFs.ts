@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readCustomersDb } from "./customersFs";
 import { getDataDir } from "./userStore";
 
 const SHARED_DIR = path.join(getDataDir(), "shared");
@@ -138,4 +139,31 @@ export async function removePlaylistAssignmentForCustomer(
   }
   await writeAssignmentsDb(db);
   return true;
+}
+
+/**
+ * Für den EDL-Browser: pro .list-Dateiname der Kundenname, falls dieser Pfad einem Kunden zugewiesen ist.
+ */
+export async function getPlaylistFileNamesToCustomerNames(
+  libraryOwnerUserId: string,
+  parentSegments: string[],
+  playlistFileNames: string[]
+): Promise<Record<string, string>> {
+  if (playlistFileNames.length === 0) return {};
+  const assignDb = await readAssignmentsDb();
+  const custDb = await readCustomersDb();
+  const nameById = new Map(custDb.customers.map((c) => [c.id, c.name.trim()]));
+  const out: Record<string, string> = {};
+  for (const fn of playlistFileNames) {
+    const ref: PlaylistLibraryRef = { libraryOwnerUserId, parentSegments, fileName: fn };
+    const k = refKey(ref);
+    for (const [cid, list] of Object.entries(assignDb.byCustomer)) {
+      if (list.some((r) => refKey(r) === k)) {
+        const nm = nameById.get(cid);
+        if (nm) out[fn] = nm;
+        break;
+      }
+    }
+  }
+  return out;
 }

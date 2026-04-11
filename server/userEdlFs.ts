@@ -5,7 +5,7 @@ import { getDataDir } from "./userStore";
 
 export type EdlDirEntryFs = { name: string; kind: "file" | "directory" };
 
-function isPlaylistLibraryFileName(name: string): boolean {
+export function isPlaylistLibraryFileName(name: string): boolean {
   const l = name.toLowerCase();
   return l.endsWith(".list") || l.endsWith(".egpl");
 }

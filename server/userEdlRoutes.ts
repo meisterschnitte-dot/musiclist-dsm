@@ -1,10 +1,12 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { bearerAuth } from "./authMiddleware";
+import { getPlaylistFileNamesToCustomerNames } from "./customerPlaylistAssignmentsFs";
 import {
   deleteUserEdlDirectory,
   deleteUserEdlFile,
   ensureUserEdlRoot,
+  isPlaylistLibraryFileName,
   listUserEdlDirectory,
   mkdirUserEdl,
   moveUserEdlDirectory,
@@ -48,7 +50,17 @@ export function createUserEdlRouter(): Router {
       await ensureUserEdlRoot(uid);
       const segments = segmentsBody(req.body);
       const entries = await listUserEdlDirectory(uid, segments);
-      res.json({ entries });
+      const playlistNames = entries
+        .filter((e) => e.kind === "file" && isPlaylistLibraryFileName(e.name))
+        .map((e) => e.name);
+      const customerByFile = await getPlaylistFileNamesToCustomerNames(uid, segments, playlistNames);
+      const entriesWithLabels = entries.map((e) => {
+        if (e.kind !== "file") return e;
+        const cust = customerByFile[e.name];
+        if (!cust) return e;
+        return { ...e, label: `${e.name} - (${cust})` };
+      });
+      res.json({ entries: entriesWithLabels });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : "Liste fehlgeschlagen." });
     }
