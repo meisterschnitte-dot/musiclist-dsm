@@ -1,14 +1,28 @@
 /**
- * Liest aus einer MP3 den Roh-Text bestimmter ID3v2-Text-Frames (TCOM, TPE1),
- * ohne die Aufteilung an `/` bzw. die spätere Zusammenfügung mit ", ".
+ * Liest aus einer MP3 Roh-Texte aus ID3v2, ohne die ID3v2.3-Regel
+ * „an `/` splitten“ (music-metadata `FrameParser.splitValue`).
  *
- * `music-metadata` wendet auf ID3v2.3 für TCOM/TPE1 u. a. `split('/')` an
- * (siehe FrameParser.splitValue) und mappt danach auf `common.composer`/`artist`.
- * Dadurch gehen Trennzeichen wie `//` verloren. Hier wird der Frame-Payload
- * direkt nach [encoding][text] dekodiert — wie vor dem Split.
+ * Betrifft u. a. TCOM/TPE1 und **TXXX** (Hersteller, Label, …): Werte wie
+ * `Warner/Chappell…` würden sonst zerlegt und nur noch teilweise gemappt.
  */
 
 const ID3_HEADER_LEN = 10;
+
+export type Id3RawPreferredFields = Partial<
+  Pick<
+    import("./audioTags").AudioTags,
+    "composer" | "artist" | "isrc" | "labelcode" | "label" | "hersteller" | "gvlRechte"
+  >
+>;
+
+/** TXXX-Beschreibungen wie in {@link ./embedId3.ts}. */
+const TXXX_DESCRIPTION_TO_KEY: Record<string, keyof Id3RawPreferredFields> = {
+  Hersteller: "hersteller",
+  ISRC: "isrc",
+  Labelcode: "labelcode",
+  Label: "label",
+  "Rechterückruf": "gvlRechte",
+};
 
 function uint32Synchsafe(buf: Uint8Array, off: number): number {
   return (
@@ -85,6 +99,63 @@ function swapUtf16Bytes(u8: Uint8Array): Uint8Array {
     out[i + 1] = u8[i]!;
   }
   return out;
+}
+
+function decodeBuffer(bytes: Uint8Array, encStr: string): string {
+  if (bytes.length === 0) return "";
+  try {
+    if (encStr === "latin1") return new TextDecoder("windows-1252").decode(bytes);
+    if (encStr === "utf8") return new TextDecoder("utf8").decode(bytes);
+    if (encStr === "utf-16be") return new TextDecoder("utf-16be").decode(bytes);
+    if (encStr === "utf-16le") {
+      if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+        return new TextDecoder("utf-16le").decode(bytes.subarray(2));
+      }
+      if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+        return new TextDecoder("utf-16be").decode(bytes.subarray(2));
+      }
+      return new TextDecoder("utf-16le").decode(bytes);
+    }
+    return new TextDecoder("utf8").decode(bytes);
+  } catch {
+    return "";
+  }
+}
+
+/** Null-terminierte Beschreibung (TXXX), wie `readIdentifierAndData` in music-metadata. */
+function readNullTerminatedDescription(
+  bytes: Uint8Array,
+  encStr: string
+): { text: string; len: number } {
+  if (encStr === "utf-16le" || encStr === "utf-16be") {
+    let i = 0;
+    while (i + 1 < bytes.length) {
+      if (bytes[i] === 0 && bytes[i + 1] === 0) {
+        return { text: decodeBuffer(bytes.subarray(0, i), encStr), len: i + 2 };
+      }
+      i += 2;
+    }
+    return { text: decodeBuffer(bytes, encStr), len: bytes.length };
+  }
+  const z = bytes.indexOf(0);
+  if (z === -1) {
+    return { text: decodeBuffer(bytes, encStr), len: bytes.length };
+  }
+  return { text: decodeBuffer(bytes.subarray(0, z), encStr), len: z + 1 };
+}
+
+/**
+ * TXXX: [encoding][description \\0][value…] — Wert **ohne** splitValue an `/`.
+ */
+function decodeTxxxFrameRaw(payload: Uint8Array): { description: string; value: string } | undefined {
+  if (payload.length < 2) return undefined;
+  const { encoding: encStr } = textEncodingFromByte(payload[0]!);
+  const afterEnc = payload.subarray(1);
+  const desc = readNullTerminatedDescription(afterEnc, encStr);
+  const valueBytes = afterEnc.subarray(desc.len);
+  const value = decodeBuffer(valueBytes, encStr).replace(/\0+$/, "").trim();
+  const description = desc.text.replace(/\0+$/, "").trim();
+  return { description, value };
 }
 
 /** Entfernt unsynchronisation-Bytes (0x00 nach 0xFF) wie ID3v2Parser.removeUnsyncBytes. */
@@ -173,14 +244,11 @@ function sliceFramePayload(
 }
 
 /**
- * Sucht im ID3v2-Tag nach TCOM (bzw. v2.2 TCM) bzw. TPE1 (bzw. v2.2 TP1)
- * und liefert die Roh-Strings ohne `/`-Split.
+ * Ein Durchlauf über den ID3v2-Tag am Dateianfang: TCOM, TPE1, TXXX (siehe embedId3)
+ * mit vollständigen Strings ohne `/`-Split durch die Bibliothek.
  */
-export function readId3RawComposerAndLeadArtist(u8: Uint8Array): {
-  composer?: string;
-  leadArtist?: string;
-} {
-  const out: { composer?: string; leadArtist?: string } = {};
+export function readId3RawPreferredTextFields(u8: Uint8Array): Id3RawPreferredFields {
+  const out: Id3RawPreferredFields = {};
   if (u8.length < ID3_HEADER_LEN) return out;
 
   const id = String.fromCharCode(u8[0]!, u8[1]!, u8[2]!);
@@ -218,15 +286,25 @@ export function readId3RawComposerAndLeadArtist(u8: Uint8Array): {
     const payload = sliceFramePayload(rawPayload, fh);
     if (payload === undefined || payload.length === 0) continue;
 
+    if (major >= 3 && idNorm === "TXXX") {
+      const txxx = decodeTxxxFrameRaw(payload);
+      if (!txxx) continue;
+      const key = TXXX_DESCRIPTION_TO_KEY[txxx.description];
+      if (!key || !txxx.value) continue;
+      if (out[key] !== undefined) continue;
+      out[key] = txxx.value;
+      continue;
+    }
+
     const text = decodeId3TextInformationFrame(payload);
     if (!text) continue;
 
     if (major === 2) {
       if (idNorm === "TCM" && out.composer === undefined) out.composer = text;
-      if (idNorm === "TP1" && out.leadArtist === undefined) out.leadArtist = text;
+      if (idNorm === "TP1" && out.artist === undefined) out.artist = text;
     } else {
       if (idNorm === "TCOM" && out.composer === undefined) out.composer = text;
-      if (idNorm === "TPE1" && out.leadArtist === undefined) out.leadArtist = text;
+      if (idNorm === "TPE1" && out.artist === undefined) out.artist = text;
     }
   }
 

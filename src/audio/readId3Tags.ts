@@ -1,14 +1,13 @@
 import type { IAudioMetadata } from "music-metadata";
 import type { AudioTags } from "./audioTags";
-import { readId3RawComposerAndLeadArtist } from "./readId3RawTextFrames";
+import { readId3RawPreferredTextFields } from "./readId3RawTextFrames";
 
 /**
  * `music-metadata` wird nur dynamisch geladen, wenn ID3 gelesen wird (z. B. Tag-Dialog),
  * damit der Start-Bundle klein bleibt. Die Musikdatenbank-Tabelle ruft das nicht pro Zeile auf.
  *
- * Komponist (TCOM) und Lead-Artist (TPE1): `common.*` entsteht aus einer ID3v2.3-Regel,
- * die Werte an `/` splittet — `//` geht dabei verloren. {@link readId3RawComposerAndLeadArtist}
- * liest den Frame-Rohstring und überschreibt diese Felder, wenn ein ID3v2-Tag am Dateianfang liegt.
+ * TCOM, TPE1, TXXX (u. a. Hersteller): `music-metadata` splittet ID3v2.3-Texte an `/`.
+ * {@link readId3RawPreferredTextFields} liest Rohstrings und überschreibt diese Felder.
  */
 
 /** Entspricht den TXXX-Beschreibungen aus `embedId3.ts`. */
@@ -85,9 +84,14 @@ export async function readAudioTagsFromBlob(blob: Blob): Promise<AudioTags> {
       skipCovers: true,
     });
     const out = audioTagsFromMetadata(metadata);
-    const raw = readId3RawComposerAndLeadArtist(u8);
+    const raw = readId3RawPreferredTextFields(u8);
     if (raw.composer !== undefined) out.composer = raw.composer;
-    if (raw.leadArtist !== undefined) out.artist = raw.leadArtist;
+    if (raw.artist !== undefined) out.artist = raw.artist;
+    if (raw.isrc !== undefined) out.isrc = raw.isrc;
+    if (raw.labelcode !== undefined) out.labelcode = raw.labelcode;
+    if (raw.label !== undefined) out.label = raw.label;
+    if (raw.hersteller !== undefined) out.hersteller = raw.hersteller;
+    if (raw.gvlRechte !== undefined) out.gvlRechte = raw.gvlRechte;
     return out;
   } catch {
     return {};
