@@ -490,6 +490,23 @@ function dupDraftFormToPersistedTags(draft: AudioTags): AudioTags {
   return mergeWarnungForDisplay(o);
 }
 
+/**
+ * Duplikat-Dialog: Formular über Basis (Musikdatenbank-ID3 bzw. geplanter XLS-Datensatz).
+ * Leere Felder entfernen den jeweiligen Tag; unveränderte Felder bleiben wie in der Basis.
+ */
+function dupModalTagsOverBaseline(draft: AudioTags, baseline: AudioTags): AudioTags {
+  const merged = mergeWarnungForDisplay({ ...baseline });
+  for (const k of DUPLICATE_MODAL_DISPLAY_KEYS) {
+    const v = draft[k];
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (t) (merged as Record<string, string>)[k] = t;
+      else delete (merged as Record<string, string>)[k];
+    }
+  }
+  return mergeWarnungForDisplay(merged);
+}
+
 /** Schmalere Eingaben im Duplikat-Dialog (mehr Platz für Titel/Interpret/Album …). */
 const DUP_MODAL_COMPACT_FIELDS = new Set<keyof AudioTags>(["labelcode", "isrc", "gvlRechte"]);
 
@@ -1862,13 +1879,16 @@ export default function App() {
       const proposed = mergeWarnungForDisplay({ ...info.proposedTags });
       if (preset === "identical") {
         const exPath = info.candidates[0].existingFileName;
+        const { candidates } = initDupModalTagDrafts(info);
+        const draft = candidates[exPath] ?? {};
+        const dbBaseline = mergeWarnungForDisplay({
+          ...(info.candidateTagsByPath[exPath] ?? {}),
+        });
         return Promise.resolve({
           action: "identical" as const,
           existingFileName: exPath,
           proposedTagsEdited: proposed,
-          existingFileTagsEdited: mergeWarnungForDisplay({
-            ...(info.candidateTagsByPath[exPath] ?? {}),
-          }),
+          existingFileTagsEdited: dupModalTagsOverBaseline(draft, dbBaseline),
         });
       }
       return Promise.resolve({ action: "different" as const, proposedTagsEdited: proposed });
@@ -1912,15 +1932,45 @@ export default function App() {
     };
   }, [mp3DbToolsMenuOpen]);
 
-  const resolveDuplicate = useCallback((choice: DuplicateChoice) => {
-    if (dupApplyAllCheckedRef.current) {
-      dupApplyAllRef.current = choice.action === "identical" ? "identical" : "different";
-    }
-    setDupModal((m) => {
-      if (m) m.resolve(choice);
-      return null;
-    });
-  }, []);
+  const resolveDuplicate = useCallback(
+    (choice: DuplicateChoice) => {
+      if (dupModal) {
+        const dm = dupModal;
+        setTagStore((prev) => {
+          const next = { ...prev };
+          const row = playlist?.[dm.playlistIndex];
+          if (row) {
+            const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+            const proposedBaseline = mergeWarnungForDisplay({ ...dm.proposedTags });
+            const fullMerged = dupModalTagsOverBaseline(dupTagDraftProposed, proposedBaseline);
+            next[playlistTagKey(row.id)] = overlayFromForm(base, fullMerged);
+          }
+          for (const c of dm.candidates) {
+            const fk = fileTagKey(c.existingFileName);
+            const fileBase = defaultTagsFromPlaylistTitle(c.existingFileName);
+            const dbBaseline = mergeWarnungForDisplay({
+              ...(dm.candidateTagsByPath[c.existingFileName] ?? {}),
+            });
+            const fullMerged = dupModalTagsOverBaseline(
+              dupTagDraftCandidates[c.existingFileName] ?? {},
+              dbBaseline
+            );
+            next[fk] = overlayFromForm(fileBase, fullMerged);
+          }
+          persistTagStore(next);
+          return next;
+        });
+      }
+      if (dupApplyAllCheckedRef.current) {
+        dupApplyAllRef.current = choice.action === "identical" ? "identical" : "different";
+      }
+      setDupModal((m) => {
+        if (m) m.resolve(choice);
+        return null;
+      });
+    },
+    [dupModal, playlist, dupTagDraftProposed, dupTagDraftCandidates, persistTagStore]
+  );
 
   const openPlaylistTags = useCallback(
     (index: number) => {
@@ -2574,6 +2624,7 @@ export default function App() {
             for (const [, ow] of Object.entries(duplicateOverwriteFileTagsByIndex ?? {})) {
               for (const rel of ow.relativePaths) {
                 const fk = fileTagKey(rel);
+                delete next[fk];
                 const fileBase = defaultTagsFromPlaylistTitle(rel);
                 next[fk] = overlayFromForm(fileBase, ow.tags);
               }
@@ -6009,8 +6060,11 @@ export default function App() {
                                 action: "identical",
                                 existingFileName: c.existingFileName,
                                 proposedTagsEdited: dupDraftFormToPersistedTags(dupTagDraftProposed),
-                                existingFileTagsEdited: dupDraftFormToPersistedTags(
-                                  dupTagDraftCandidates[c.existingFileName] ?? {}
+                                existingFileTagsEdited: dupModalTagsOverBaseline(
+                                  dupTagDraftCandidates[c.existingFileName] ?? {},
+                                  mergeWarnungForDisplay({
+                                    ...(dupModal.candidateTagsByPath[c.existingFileName] ?? {}),
+                                  })
                                 ),
                               })
                             }

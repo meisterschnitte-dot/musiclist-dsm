@@ -58,11 +58,13 @@ export type DuplicateCandidate = {
 export type DuplicatePrompt = {
   playlistTitle: string;
   proposedFileName: string;
+  /** Index der aktuellen Playlist-Zeile im Export (UI: Tag-Entwürfe zuordnen). */
+  playlistIndex: number;
   /** Mindestens ein Eintrag — Reihenfolge: exakte Namen zuerst, dann ähnliche Titel. */
   candidates: DuplicateCandidate[];
   /** Geplante Tags für die neue Datei (wie beim Schreiben). */
   proposedTags: AudioTags;
-  /** ID3 aus den Kandidaten-Dateien (Pfad wie in der Musikdatenbank). */
+  /** ID3 aus den Kandidaten-Dateien auf dem Server / Speicherort — nur Musikdatenbank, keine App-Overlays. */
   candidateTagsByPath: Record<string, AudioTags>;
 };
 
@@ -326,6 +328,7 @@ export async function exportFakeTracksToTracksFolder(
       const choice = await onDuplicate({
         playlistTitle: row.title,
         proposedFileName,
+        playlistIndex: index,
         candidates: conflicts,
         proposedTags,
         candidateTagsByPath,
@@ -506,6 +509,7 @@ export async function exportFakeTracksToSharedStorage(
       const choice = await onDuplicate({
         playlistTitle: row.title,
         proposedFileName,
+        playlistIndex: index,
         candidates: conflicts,
         proposedTags,
         candidateTagsByPath,

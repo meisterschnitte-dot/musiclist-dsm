@@ -1,9 +1,14 @@
 import type { IAudioMetadata } from "music-metadata";
 import type { AudioTags } from "./audioTags";
+import { readId3RawComposerAndLeadArtist } from "./readId3RawTextFrames";
 
 /**
  * `music-metadata` wird nur dynamisch geladen, wenn ID3 gelesen wird (z. B. Tag-Dialog),
  * damit der Start-Bundle klein bleibt. Die Musikdatenbank-Tabelle ruft das nicht pro Zeile auf.
+ *
+ * Komponist (TCOM) und Lead-Artist (TPE1): `common.*` entsteht aus einer ID3v2.3-Regel,
+ * die Werte an `/` splittet — `//` geht dabei verloren. {@link readId3RawComposerAndLeadArtist}
+ * liest den Frame-Rohstring und überschreibt diese Felder, wenn ein ID3v2-Tag am Dateianfang liegt.
  */
 
 /** Entspricht den TXXX-Beschreibungen aus `embedId3.ts`. */
@@ -72,12 +77,18 @@ function audioTagsFromMetadata(metadata: IAudioMetadata): AudioTags {
  */
 export async function readAudioTagsFromBlob(blob: Blob): Promise<AudioTags> {
   try {
-    const { parseBlob } = await import("music-metadata");
-    const metadata = await parseBlob(blob, {
+    const ab = await blob.arrayBuffer();
+    const u8 = new Uint8Array(ab);
+    const { parseBuffer } = await import("music-metadata");
+    const metadata = await parseBuffer(u8, "audio/mpeg", {
       duration: false,
       skipCovers: true,
     });
-    return audioTagsFromMetadata(metadata);
+    const out = audioTagsFromMetadata(metadata);
+    const raw = readId3RawComposerAndLeadArtist(u8);
+    if (raw.composer !== undefined) out.composer = raw.composer;
+    if (raw.leadArtist !== undefined) out.artist = raw.leadArtist;
+    return out;
   } catch {
     return {};
   }
