@@ -3137,25 +3137,20 @@ export default function App() {
 
   const removePlaylistRowsFromList = useCallback((indices: number[]) => {
     if (!indices.length) return;
+    if (!playlist?.length) return;
     setEdlSelectedRowIndices(new Set());
     setEdlSelectionAnchorPlaylistIndex(null);
     const removeSet = new Set(indices);
-    let rowsToRemove: PlaylistEntry[] = [];
-    setPlaylist((prev) => {
-      if (!prev?.length) return prev;
-      rowsToRemove = prev.filter((_, idx) => removeSet.has(idx));
-      if (!rowsToRemove.length) return prev;
-      return prev.filter((_, idx) => !removeSet.has(idx));
-    });
+    const rowsToRemove = playlist.filter((_, idx) => removeSet.has(idx));
     if (!rowsToRemove.length) return;
-    setTagStore((ts) => {
-      const next = { ...ts };
-      for (const row of rowsToRemove) {
-        delete next[playlistTagKey(row.id)];
-      }
-      persistTagStore(next);
-      return next;
-    });
+    const nextPlaylist = playlist.filter((_, idx) => !removeSet.has(idx));
+    setPlaylist(nextPlaylist);
+    const nextTagStore = { ...tagStoreRef.current };
+    for (const row of rowsToRemove) {
+      delete nextTagStore[playlistTagKey(row.id)];
+    }
+    setTagStore(nextTagStore);
+    persistTagStore(nextTagStore);
     setTagModal((tm) => {
       if (!tm || tm.kind !== "playlist") return tm;
       if (removeSet.has(tm.index)) return null;
@@ -3170,7 +3165,30 @@ export default function App() {
         ? "Ein Eintrag wurde aus der Liste entfernt. Verknüpfte MP3s bleiben in der Musikdatenbank."
         : `${n} Einträge wurden aus der Liste entfernt. Verknüpfte MP3s bleiben in der Musikdatenbank.`
     );
-  }, [persistTagStore]);
+    if (edlLibraryAccess && loadedLibraryFile?.kind === "playlist") {
+      const tagsByRowId: Record<string, AudioTags> = {};
+      for (const row of nextPlaylist) {
+        const tags = nextTagStore[playlistTagKey(row.id)];
+        if (!tags || (!hasAnyAudioTagValue(tags) && tags.warnung !== true)) continue;
+        tagsByRowId[row.id] = tags;
+      }
+      const payload = serializePlaylistLibraryFile({
+        v: 1,
+        displayTitle: edlTitle,
+        playlist: nextPlaylist,
+        ...(Object.keys(tagsByRowId).length ? { tagsByRowId } : {}),
+        tracksLinkedAtIso: new Date().toISOString(),
+      });
+      void edlLibraryAccess
+        .writeText(loadedLibraryFile.parentSegments, loadedLibraryFile.fileName, payload)
+        .then(() => setEdlLibraryRefresh((k) => k + 1))
+        .catch(() =>
+          setError(
+            "Einträge wurden aus der aktuellen Ansicht entfernt, aber die .list-Datei konnte nicht aktualisiert werden."
+          )
+        );
+    }
+  }, [playlist, persistTagStore, edlLibraryAccess, loadedLibraryFile, edlTitle]);
 
   const showTrackInMusicDatabase = useCallback((fileName: string) => {
     setTagsCtxMenu(null);
