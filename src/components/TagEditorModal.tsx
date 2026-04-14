@@ -3,7 +3,9 @@ import {
   useEffect,
   useRef,
   useState,
+  type ClipboardEvent,
   type ChangeEvent,
+  type FocusEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
@@ -68,6 +70,7 @@ import {
   looksLikeExtremeMusicMetadata,
   parseExtremeMusicMetadataText,
 } from "../audio/parseExtremeMusicMetadataText";
+import { lookupWcpmTags } from "../api/musikverlageApi";
 
 type TagFormFields = Record<Exclude<keyof AudioTags, "warnung">, string>;
 
@@ -178,6 +181,9 @@ export function TagEditorModal({
   >(null);
   const [blankframeApiBusy, setBlankframeApiBusy] = useState(false);
   const [blankframeApiErr, setBlankframeApiErr] = useState<string | null>(null);
+  const [wcpmApiBusy, setWcpmApiBusy] = useState(false);
+  const [wcpmApiErr, setWcpmApiErr] = useState<string | null>(null);
+  const [labelcodeLookupHint, setLabelcodeLookupHint] = useState<string | null>(null);
 
   const applyFilenameSelectionToField = useCallback(
     (field: (typeof FILENAME_TARGET_FIELDS)[number]["key"], text: string) => {
@@ -211,6 +217,8 @@ export function TagEditorModal({
     setPasteDraft("");
     setOverwriteParsed(true);
     setBlankframeApiErr(null);
+    setWcpmApiErr(null);
+    setLabelcodeLookupHint(null);
   }, [open, initial, multiTrack]);
 
   useEffect(() => {
@@ -381,6 +389,47 @@ export function TagEditorModal({
     }
   }, [p7SearchSource, gvlLabelDb]);
 
+  const onWcpmLookupClick = useCallback(async () => {
+    setWcpmApiErr(null);
+    const src = p7SearchSource?.trim();
+    if (!src) return;
+    setWcpmApiBusy(true);
+    try {
+      const partial = await lookupWcpmTags(src);
+      setForm((prev) => {
+        const next = { ...prev };
+        const keys: (keyof TagFormFields)[] = [
+          "songTitle",
+          "artist",
+          "album",
+          "composer",
+          "isrc",
+          "labelcode",
+        ];
+        for (const k of keys) {
+          const v = partial[k as keyof typeof partial];
+          if (typeof v !== "string" || !v.trim()) continue;
+          (next as Record<string, string>)[k] = v.trim();
+        }
+        const lc = next.labelcode?.trim();
+        if (lc) {
+          const db = gvlLabelDb ?? loadGvlLabelDb();
+          const entry = findGvlEntryByLabelcode(db, lc);
+          if (entry) {
+            next.label = entry.label;
+            next.hersteller = entry.hersteller;
+            next.gvlRechte = entry.rechterueckrufe;
+          }
+        }
+        return next;
+      });
+    } catch (e) {
+      setWcpmApiErr(e instanceof Error ? e.message : "WCPM-Lookup fehlgeschlagen.");
+    } finally {
+      setWcpmApiBusy(false);
+    }
+  }, [p7SearchSource, gvlLabelDb]);
+
   const setStandard = useCallback(
     (key: keyof TagFormFields) =>
       (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -398,37 +447,70 @@ export function TagEditorModal({
     []
   );
 
-  const onMultiLabelcodeChange = useCallback(
-    (e: ChangeEvent<HTMLInputElement>) => {
-      const v = e.target.value;
-      setForm((prev) => {
-        let next = { ...prev, labelcode: v };
-        const lc = v.trim();
-        const touch = new Set<string>(["labelcode"]);
-        if (lc) {
-          const db = gvlLabelDb ?? loadGvlLabelDb();
-          const entry = findGvlEntryByLabelcode(db, lc);
-          if (entry) {
-            next = {
-              ...next,
+  const applyLabelcodeWithGvlLookup = useCallback(
+    (raw: string, markTouched: boolean) => {
+      const normalized = labelcodeWithLcPrefix(raw);
+      const lc = normalized.trim();
+      const db = gvlLabelDb ?? loadGvlLabelDb();
+      const entry = lc ? findGvlEntryByLabelcode(db, lc) : undefined;
+      setForm((prev) => ({
+        ...prev,
+        labelcode: normalized,
+        ...(entry
+          ? {
               label: entry.label,
               hersteller: entry.hersteller,
               gvlRechte: entry.rechterueckrufe,
-            };
-            touch.add("label");
-            touch.add("hersteller");
-            touch.add("gvlRechte");
-          }
+            }
+          : {}),
+      }));
+      setLabelcodeLookupHint(lc && !entry ? `Kein GVL-Treffer für ${normalized}.` : null);
+      if (multiTrack && markTouched) {
+        const touched = new Set<string>(["labelcode"]);
+        if (entry) {
+          touched.add("label");
+          touched.add("hersteller");
+          touched.add("gvlRechte");
         }
-        setMultiTouched((prev) => new Set([...prev, ...touch]));
-        return next;
-      });
+        setMultiTouched((prev) => new Set([...prev, ...touched]));
+      }
     },
-    [gvlLabelDb]
+    [gvlLabelDb, multiTrack]
+  );
+
+  const onLabelcodeChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = e.target.value;
+      if (multiTrack) setMultiTouched((prev) => new Set(prev).add("labelcode"));
+      setForm((prev) => ({ ...prev, labelcode: v }));
+      setLabelcodeLookupHint(null);
+    },
+    [multiTrack]
+  );
+
+  const onLabelcodePaste = useCallback(
+    (e: ClipboardEvent<HTMLInputElement>) => {
+      const pasted = e.clipboardData.getData("text");
+      if (!pasted.trim()) return;
+      e.preventDefault();
+      applyLabelcodeWithGvlLookup(pasted, true);
+    },
+    [applyLabelcodeWithGvlLookup]
+  );
+
+  const onLabelcodeBlur = useCallback(
+    (e: FocusEvent<HTMLInputElement>) => {
+      const raw = e.currentTarget.value;
+      if (!raw.trim()) {
+        setLabelcodeLookupHint(null);
+        return;
+      }
+      applyLabelcodeWithGvlLookup(raw, multiTrack);
+    },
+    [applyLabelcodeWithGvlLookup, multiTrack]
   );
 
   const fieldSetter = multiTrack ? setMultiField : setStandard;
-  const labelcodeChangeHandler = multiTrack ? onMultiLabelcodeChange : setStandard("labelcode");
 
   if (!open) return null;
 
@@ -546,8 +628,20 @@ export function TagEditorModal({
           </label>
           <label className="tag-field">
             <span>Labelcode</span>
-            <input type="text" value={form.labelcode} onChange={labelcodeChangeHandler} autoComplete="off" />
+            <input
+              type="text"
+              value={form.labelcode}
+              onChange={onLabelcodeChange}
+              onPaste={onLabelcodePaste}
+              onBlur={onLabelcodeBlur}
+              autoComplete="off"
+            />
           </label>
+          {labelcodeLookupHint ? (
+            <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="status">
+              {labelcodeLookupHint}
+            </p>
+          ) : null}
           <label className="tag-field">
             <span>Label</span>
             <input type="text" value={form.label} onChange={fieldSetter("label")} autoComplete="off" />
@@ -649,9 +743,23 @@ export function TagEditorModal({
             >
               {blankframeApiBusy ? "Blankframe …" : "Blankframe-Suche"}
             </button>
+            <button
+              type="button"
+              className="btn-modal"
+              disabled={wcpmApiBusy}
+              title="Zeile aus der hochgeladenen WCPM-Excel (Verwaltung → Musikverlage) per Dateiname (Spalte FILENAME; .wav/.mp3 wird ignoriert). Labelcode mit LC …; GVL-Ergänzung wenn vorhanden."
+              onClick={() => void onWcpmLookupClick()}
+            >
+              {wcpmApiBusy ? "WCPM …" : "WCPM"}
+            </button>
             {blankframeApiErr ? (
               <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
                 {blankframeApiErr}
+              </p>
+            ) : null}
+            {wcpmApiErr ? (
+              <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
+                {wcpmApiErr}
               </p>
             ) : null}
             {showGvlDatabaseButton ? (

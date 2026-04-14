@@ -33,6 +33,7 @@ import { TagEditorModal, type GvlApplyFromDbPayload } from "./components/TagEdit
 import { ChangePasswordModal } from "./components/ChangePasswordModal";
 import { UserAuthScreen } from "./components/UserAuthScreen";
 import { CustomersModal } from "./components/CustomersModal";
+import { MusikverlageModal } from "./components/MusikverlageModal";
 import { PlaylistMailModal } from "./components/PlaylistMailModal";
 import { TransferCustomerModal } from "./components/TransferCustomerModal";
 import { UserManagementModal } from "./components/UserManagementModal";
@@ -938,6 +939,7 @@ export default function App() {
   const [sessionUserId, setSessionUserIdState] = useState<string | null>(null);
   const [userManagementOpen, setUserManagementOpen] = useState(false);
   const [customersModalOpen, setCustomersModalOpen] = useState(false);
+  const [musikverlageOpen, setMusikverlageOpen] = useState(false);
   /** Vorschau „Kundenansicht“ (Playlist wie XLS-Export, ohne Musikdatenbank) — zunächst nur aus dem Verwaltungsmenü. */
   const [customerModeActive, setCustomerModeActive] = useState(false);
   /** Kundenansicht: markierte Zellen (Strg/Cmd+Klick); Strg/Cmd+C → Zwischenablage. */
@@ -2004,40 +2006,6 @@ export default function App() {
     [playlist, tagStore, sessionUserId]
   );
 
-  /** In der Playlist: genau eine Zeile ausgewählt → T öffnet „Tags bearbeiten“. */
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (e.key !== "t" && e.key !== "T") return;
-      const ae = document.activeElement;
-      if (
-        ae instanceof HTMLInputElement ||
-        ae instanceof HTMLTextAreaElement ||
-        ae instanceof HTMLSelectElement ||
-        (ae instanceof HTMLElement && ae.isContentEditable)
-      )
-        return;
-      if (tagModal || tagModalLoadBusy) return;
-      if (playlistAsCustomerExport) return;
-      if (!playlist?.length) return;
-      if (edlSelectedRowIndices.size !== 1) return;
-      const idx = edlSelectedRowIndices.values().next().value;
-      if (typeof idx !== "number") return;
-      e.preventDefault();
-      openPlaylistTags(idx);
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [
-    tagModal,
-    tagModalLoadBusy,
-    playlistAsCustomerExport,
-    playlist,
-    edlSelectedRowIndices,
-    openPlaylistTags,
-  ]);
-
   const openPlaylistTagsMulti = useCallback((indices: number[]) => {
     if (indices.length < 2) return;
     setTagEditInitial({});
@@ -2076,6 +2044,52 @@ export default function App() {
     },
     [playlist, tagStore, sessionUserId]
   );
+
+  /** Genau eine Auswahl (Playlist oder Musikdatenbank) → T öffnet „Tags bearbeiten“. */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== "t" && e.key !== "T") return;
+      const ae = document.activeElement;
+      if (
+        ae instanceof HTMLInputElement ||
+        ae instanceof HTMLTextAreaElement ||
+        ae instanceof HTMLSelectElement ||
+        (ae instanceof HTMLElement && ae.isContentEditable)
+      )
+        return;
+      if (tagModal || tagModalLoadBusy) return;
+      if (playlistAsCustomerExport) return;
+      if (edlSelectedRowIndices.size === 1 && playlist?.length) {
+        const idx = edlSelectedRowIndices.values().next().value;
+        if (typeof idx === "number") {
+          e.preventDefault();
+          openPlaylistTags(idx);
+          return;
+        }
+      }
+      if (mp3SelectedNames.size === 1 && mp3DbTableVisible) {
+        const fileName = mp3SelectedNames.values().next().value;
+        if (typeof fileName === "string" && fileName.trim()) {
+          e.preventDefault();
+          openFileTags(fileName);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [
+    tagModal,
+    tagModalLoadBusy,
+    playlistAsCustomerExport,
+    playlist,
+    edlSelectedRowIndices,
+    openPlaylistTags,
+    mp3SelectedNames,
+    mp3DbTableVisible,
+    openFileTags,
+  ]);
 
   const confirmCreateNewMp3 = useCallback(async () => {
     setNewMp3Error(null);
@@ -4276,6 +4290,7 @@ export default function App() {
           onToggleCustomerView={() => setCustomerModeActive((v) => !v)}
           onExitCustomerView={() => setCustomerModeActive(false)}
           onSystemSettings={onOpenSystemSettings}
+          onOpenMusikverlage={() => setMusikverlageOpen(true)}
           infoMessage={!error ? infoMessage : null}
           fontScale={fontScale}
           onFontScaleDec={onFontScaleDec}
@@ -5483,6 +5498,10 @@ export default function App() {
           onImportDone={onImportGvlDb}
           onApplyEntryToTag={tagModal ? applyGvlRowToOpenTag : undefined}
         />
+      )}
+
+      {musikverlageOpen && isAdmin && (
+        <MusikverlageModal open onClose={() => setMusikverlageOpen(false)} />
       )}
 
       {userManagementOpen && isAdmin && (

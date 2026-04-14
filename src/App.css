@@ -2299,6 +2299,121 @@ body {
   padding: 1.5rem 1.65rem 1.35rem;
 }
 
+.modal.modal--musikverlage {
+  max-width: min(96vw, 1100px);
+  width: min(96vw, 1100px);
+  padding: 1.5rem 1.65rem 1.35rem;
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.musikverlage-table-wrap {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  margin: 0.75rem 0 1rem;
+  border: 1px solid rgba(61, 70, 84, 0.45);
+  border-radius: 8px;
+}
+
+.musikverlage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.musikverlage-table th,
+.musikverlage-table td {
+  padding: 0.55rem 0.65rem;
+  border-bottom: 1px solid rgba(61, 70, 84, 0.35);
+  vertical-align: top;
+  text-align: left;
+}
+
+.musikverlage-table th {
+  background: rgba(61, 70, 84, 0.12);
+  font-weight: 600;
+}
+
+.musikverlage-table-label {
+  font-weight: 600;
+}
+
+.musikverlage-table-hint {
+  font-size: 0.78rem;
+  color: var(--app-text-muted);
+  margin-top: 0.2rem;
+  line-height: 1.35;
+}
+
+.musikverlage-api-input {
+  width: 100%;
+  min-width: 12rem;
+  box-sizing: border-box;
+}
+
+.musikverlage-table-file {
+  min-width: 10rem;
+}
+
+.musikverlage-file-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.musikverlage-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.15rem;
+}
+
+.musikverlage-file-action-btn {
+  padding: 0.18rem 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.musikverlage-file-name {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.musikverlage-file-meta {
+  font-size: 0.78rem;
+  color: var(--app-text-muted);
+}
+
+.musikverlage-file-none {
+  font-size: 0.82rem;
+  color: var(--app-text-muted);
+  margin-right: 0.35rem;
+}
+
+.musikverlage-upload-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.musikverlage-upload-label--inline {
+  margin: 0;
+}
+
+.musikverlage-upload-label--after-none {
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
 .customers-modal-header {
   margin-bottom: 1.1rem;
   padding-bottom: 1rem;

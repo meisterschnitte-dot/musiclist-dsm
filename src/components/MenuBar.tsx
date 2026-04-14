@@ -24,6 +24,8 @@ type MenuBarProps = {
   /** Zurück zur Admin-Standardansicht (Kundenansicht aus). */
   onExitCustomerView?: () => void;
   onSystemSettings: () => void;
+  /** Musikverlage (API/Tabelle pro Portal) — nur Admin. */
+  onOpenMusikverlage: () => void;
   /** Kurze Erfolgshinweise; optional in der Leiste rechts */
   infoMessage?: string | null;
   /** Schriftgröße (0.75–1.5), steuert `rem` über `--app-font-scale`. */
@@ -53,6 +55,7 @@ export function MenuBar({
   onToggleCustomerView,
   onExitCustomerView,
   onSystemSettings,
+  onOpenMusikverlage,
   infoMessage,
   fontScale,
   onFontScaleDec,
@@ -148,6 +151,17 @@ export function MenuBar({
                   }}
                 >
                   GVL-Daten
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(null);
+                    onOpenMusikverlage();
+                  }}
+                >
+                  Musikverlage
                 </button>
                 <button
                   type="button"
