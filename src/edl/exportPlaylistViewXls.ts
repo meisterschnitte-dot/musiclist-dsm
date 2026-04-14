@@ -34,6 +34,20 @@ const REF_COL_WIDTHS = [
   19.375,
 ];
 
+/** Kundenvorgabe: explizite Spaltenbreiten für den XLSX-Export. */
+const EXPORT_COL_WIDTH_OVERRIDES: Partial<Record<EdlTableColumnId, number>> = {
+  num: 4,
+  tcIn: 10,
+  tcOut: 10,
+  duration: 10,
+  isrc: 14,
+  labelcode: 9,
+  artist: 25,
+  composer: 35,
+  hersteller: 34,
+  gvlRechte: 14,
+};
+
 const BORDER_THIN = {
   top: { style: "thin" as const, color: { argb: "FFBFBFBF" } },
   left: { style: "thin" as const, color: { argb: "FFBFBFBF" } },
@@ -66,9 +80,13 @@ export function suggestedPlaylistExportFileName(loadedFileName: string): string 
   return `${safe}_export.xlsx`;
 }
 
-function setColumnWidths(ws: Worksheet, numCols: number): void {
-  for (let c = 1; c <= numCols; c++) {
-    const w = REF_COL_WIDTHS[(c - 1) % REF_COL_WIDTHS.length] ?? 18;
+function setColumnWidths(ws: Worksheet, exportColumnIds: EdlTableColumnId[]): void {
+  for (let c = 1; c <= exportColumnIds.length; c++) {
+    const colId = exportColumnIds[c - 1];
+    const w =
+      (colId ? EXPORT_COL_WIDTH_OVERRIDES[colId] : undefined) ??
+      REF_COL_WIDTHS[(c - 1) % REF_COL_WIDTHS.length] ??
+      18;
     ws.getColumn(c).width = w;
   }
 }
@@ -116,8 +134,8 @@ export async function buildPlaylistExportXlsxBuffer(
     views: [{ zoomScale: 55 }],
   });
 
-  const titleFont = { name: "Arial", size: 18, bold: true, color: { argb: "FF000000" } };
-  const labelFont = { name: "Arial", size: 14, color: { argb: "FF000000" } };
+  const titleFont = { name: "Arial", size: 8, bold: true, color: { argb: "FF000000" } };
+  const labelFont = { name: "Arial", size: 8, color: { argb: "FF000000" } };
 
   if (numCols >= 2) {
     ws.mergeCells(`A1:B1`);
@@ -152,17 +170,17 @@ export async function buildPlaylistExportXlsxBuffer(
     ws.getCell("A2").alignment = { vertical: "middle", horizontal: "left" };
   }
 
-  ws.getRow(1).height = 30;
-  ws.getRow(2).height = 23.65;
-  ws.getRow(3).height = 15;
+  ws.getRow(1).height = 25;
+  ws.getRow(2).height = 25;
+  ws.getRow(3).height = 25;
 
   const headerRowIndex = 4;
   const headerRow = ws.getRow(headerRowIndex);
-  headerRow.height = 39.75;
+  headerRow.height = 25;
   header.forEach((text, i) => {
     const cell = headerRow.getCell(i + 1);
     cell.value = text;
-    cell.font = { name: "Arial", size: 14, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.font = { name: "Arial", size: 8, bold: true, color: { argb: "FFFFFFFF" } };
     cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF808080" } };
     cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
     cell.border = BORDER_THIN;
@@ -170,7 +188,7 @@ export async function buildPlaylistExportXlsxBuffer(
 
   dataRows.forEach((cells, r) => {
     const row = ws.getRow(headerRowIndex + 1 + r);
-    row.height = 25.05;
+    row.height = 25;
     const warn = dataWarnFlags[r] === true;
     cells.forEach((val, c) => {
       const cell = row.getCell(c + 1);
@@ -178,7 +196,7 @@ export async function buildPlaylistExportXlsxBuffer(
       if (typeof val === "number") {
         cell.numFmt = "0";
       }
-      cell.font = { name: "Arial", size: 12, color: { argb: "FF000000" } };
+      cell.font = { name: "Arial", size: 8, color: { argb: "FF000000" } };
       cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
       cell.border = BORDER_THIN;
       if (warn) {
@@ -187,7 +205,7 @@ export async function buildPlaylistExportXlsxBuffer(
     });
   });
 
-  setColumnWidths(ws, numCols);
+  setColumnWidths(ws, exportColumnIds);
 
   const raw = await wb.xlsx.writeBuffer();
   return { fileName: outName, buffer: writeBufferToArrayBuffer(raw) };
