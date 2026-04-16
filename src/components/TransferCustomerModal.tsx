@@ -17,7 +17,7 @@ export function TransferCustomerModal({
   onClose,
   onConfirm,
   title = "Kunde für Playlist & Mail",
-  intro = "Die erzeugte .list wird diesem Kunden zugeordnet. Er sieht sie im Konto erst nach dem Versand der Playlist-Mail. Ohne Auswahl kein Transfer.",
+  intro = "Die erzeugte .list wird diesem Kunden direkt zugeordnet und ist sofort in seinem Konto sichtbar. Ohne Auswahl kein Transfer.",
   confirmButtonLabel = "OK — Transfer starten",
 }: Props) {
   const [err, setErr] = useState<string | null>(null);

@@ -126,4 +126,18 @@ export async function isUserEmailInCustomerDirectory(
   return customerRecordIncludesUserEmail(c, rawEmail);
 }
 
+/** Alle Kunden-IDs, in deren Verzeichnis die E-Mail enthalten ist (Hauptliste oder Gruppen). */
+export async function getCustomerIdsForUserEmail(rawEmail: string): Promise<string[]> {
+  const n = normalizeEmail(rawEmail);
+  if (!n) return [];
+  const db = await readCustomersDb();
+  const out: string[] = [];
+  for (const c of db.customers) {
+    if (customerRecordIncludesUserEmail(c, n)) {
+      out.push(c.id);
+    }
+  }
+  return out;
+}
+
 export { normalizeEmail, plausibleEmail, normalizeCustomer };

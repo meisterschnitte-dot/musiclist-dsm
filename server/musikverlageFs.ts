@@ -11,6 +11,7 @@ const UPLOADS_DIR = () => path.join(ROOT(), "uploads");
 
 export type MusikverlageEntryStored = {
   apiBaseUrl?: string;
+  xlsxFiles?: { storedFileName: string; originalFileName: string; uploadedAtIso: string }[];
   xlsxFileName?: string | null;
   xlsxUploadedAtIso?: string | null;
 };
@@ -34,24 +35,38 @@ export function assertMusikverlagId(id: string): asserts id is MusikverlagId {
   }
 }
 
-const UPLOAD_EXTS = [".xlsx", ".xls"] as const;
+const UPLOAD_EXTS = [".xlsx", ".xls", ".csv"] as const;
+type UploadExt = (typeof UPLOAD_EXTS)[number];
 
-export function uploadPathForId(id: MusikverlagId, ext: ".xlsx" | ".xls"): string {
-  return path.join(UPLOADS_DIR(), `${id}${ext}`);
+export function uploadDirForId(id: MusikverlagId): string {
+  return path.join(UPLOADS_DIR(), id);
+}
+
+export function uploadPathForId(id: MusikverlagId, ext: UploadExt, stamp?: string): string {
+  const token = stamp?.trim() || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return path.join(uploadDirForId(id), `${id}-${token}${ext}`);
+}
+
+export async function listUploadFiles(id: MusikverlagId): Promise<string[]> {
+  const dir = uploadDirForId(id);
+  try {
+    const ents = await fs.readdir(dir, { withFileTypes: true });
+    const files = ents
+      .filter((e) => e.isFile())
+      .map((e) => path.join(dir, e.name))
+      .filter((p) => UPLOAD_EXTS.includes(path.extname(p).toLowerCase() as UploadExt));
+    files.sort((a, b) => a.localeCompare(b, "de"));
+    return files;
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
 }
 
 /** Erste vorhandene hochgeladene Tabelle (.xlsx oder .xls), sonst `null`. */
 export async function findAnyUploadFile(id: MusikverlagId): Promise<string | null> {
-  for (const ext of UPLOAD_EXTS) {
-    const p = uploadPathForId(id, ext);
-    try {
-      const st = await fs.stat(p);
-      if (st.isFile()) return p;
-    } catch {
-      /* nächste Endung */
-    }
-  }
-  return null;
+  const files = await listUploadFiles(id);
+  return files[0] ?? null;
 }
 
 export async function readMusikverlageConfig(): Promise<MusikverlageConfigFile> {
@@ -71,6 +86,26 @@ export async function readMusikverlageConfig(): Promise<MusikverlageConfigFile> 
       const e = v as Partial<MusikverlageEntryStored>;
       entries[k] = {
         apiBaseUrl: typeof e.apiBaseUrl === "string" ? e.apiBaseUrl : undefined,
+        xlsxFiles: Array.isArray(e.xlsxFiles)
+          ? e.xlsxFiles
+              .map((x) => {
+                if (!x || typeof x !== "object") return null;
+                const o = x as {
+                  storedFileName?: unknown;
+                  originalFileName?: unknown;
+                  uploadedAtIso?: unknown;
+                };
+                const storedFileName =
+                  typeof o.storedFileName === "string" ? o.storedFileName.trim() : "";
+                const originalFileName =
+                  typeof o.originalFileName === "string" ? o.originalFileName.trim() : "";
+                const uploadedAtIso =
+                  typeof o.uploadedAtIso === "string" ? o.uploadedAtIso.trim() : "";
+                if (!storedFileName || !originalFileName || !uploadedAtIso) return null;
+                return { storedFileName, originalFileName, uploadedAtIso };
+              })
+              .filter((x): x is { storedFileName: string; originalFileName: string; uploadedAtIso: string } => !!x)
+          : undefined,
         xlsxFileName:
           e.xlsxFileName === null || e.xlsxFileName === undefined
             ? e.xlsxFileName ?? undefined
@@ -106,16 +141,14 @@ export async function writeMusikverlageConfig(c: MusikverlageConfigFile): Promis
 }
 
 export async function hasUploadedXlsx(id: MusikverlagId): Promise<boolean> {
-  return (await findAnyUploadFile(id)) !== null;
+  return (await listUploadFiles(id)).length > 0;
 }
 
 export async function removeUploadedXlsx(id: MusikverlagId): Promise<void> {
   removeMusikverlagSqliteDb(id);
-  for (const ext of UPLOAD_EXTS) {
-    try {
-      await fs.unlink(uploadPathForId(id, ext));
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
+  try {
+    await fs.rm(uploadDirForId(id), { recursive: true, force: true });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }

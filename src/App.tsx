@@ -203,7 +203,6 @@ import {
 import { arrayBufferToBase64 } from "./api/sendPlaylistMailApi";
 import {
   lookupPlaylistPendingCustomerRequest,
-  registerPlaylistPendingRequest,
   setPlaylistCustomerAssignmentRequest,
 } from "./api/playlistPendingApi";
 
@@ -428,6 +427,17 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
     reader.onerror = () => reject(new Error("Datei konnte nicht gelesen werden."));
     reader.readAsArrayBuffer(file);
   });
+}
+
+/** Nächster harter Session-Cutoff: täglich um 05:00 (lokale Zeit). */
+function msUntilNextDailyFiveAm(nowMs: number = Date.now()): number {
+  const now = new Date(nowMs);
+  const next = new Date(now);
+  next.setHours(5, 0, 0, 0);
+  if (now.getTime() >= next.getTime()) {
+    next.setDate(next.getDate() + 1);
+  }
+  return Math.max(250, next.getTime() - now.getTime());
 }
 
 type ImportOverlayState = { label: string; progress: number };
@@ -1067,6 +1077,16 @@ export default function App() {
     setTagStore({});
     setError(null);
   }, []);
+
+  useEffect(() => {
+    if (!sessionUserId) return;
+    const waitMs = msUntilNextDailyFiveAm();
+    const id = window.setTimeout(() => {
+      onLogout();
+      setInfoMessage("Sitzung beendet (05:00). Bitte erneut anmelden.");
+    }, waitMs);
+    return () => window.clearTimeout(id);
+  }, [sessionUserId, onLogout]);
 
   const handleAuthLoggedIn = useCallback((user: AppUserRecord, token: string) => {
     setUsersApiToken(token);
@@ -2613,39 +2633,39 @@ export default function App() {
           (duplicateOverwriteFileTagsByIndex &&
             Object.keys(duplicateOverwriteFileTagsByIndex).length > 0);
 
+        let nextTagStoreForList = tagStoreRef.current;
         if (playlistTagCopiesFromDb.length || exportPersistToFileKeys.length || hasDupModalTags) {
-          setTagStore((prev) => {
-            const next = { ...prev };
-            for (const { key, overlay } of playlistTagCopiesFromDb) {
-              next[key] = overlay;
+          const next = { ...tagStoreRef.current };
+          for (const { key, overlay } of playlistTagCopiesFromDb) {
+            next[key] = overlay;
+          }
+          for (const { key, overlay, playlistRowId } of exportPersistToFileKeys) {
+            next[key] = overlay;
+            delete next[playlistTagKey(playlistRowId)];
+          }
+          for (const [idxStr, formTags] of Object.entries(duplicateProposedTagsByIndex ?? {})) {
+            const idx = Number(idxStr);
+            const row = mergedPlaylist[idx];
+            if (!row) continue;
+            const playlistBase = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+            next[playlistTagKey(row.id)] = overlayFromForm(playlistBase, formTags);
+          }
+          for (const [, ent] of Object.entries(duplicateIdenticalFileTagsByIndex ?? {})) {
+            const fk = fileTagKey(ent.relativePath);
+            const fileBase = defaultTagsFromPlaylistTitle(ent.relativePath);
+            next[fk] = overlayFromForm(fileBase, ent.tags);
+          }
+          for (const [, ow] of Object.entries(duplicateOverwriteFileTagsByIndex ?? {})) {
+            for (const rel of ow.relativePaths) {
+              const fk = fileTagKey(rel);
+              delete next[fk];
+              const fileBase = defaultTagsFromPlaylistTitle(rel);
+              next[fk] = overlayFromForm(fileBase, ow.tags);
             }
-            for (const { key, overlay, playlistRowId } of exportPersistToFileKeys) {
-              next[key] = overlay;
-              delete next[playlistTagKey(playlistRowId)];
-            }
-            for (const [idxStr, formTags] of Object.entries(duplicateProposedTagsByIndex ?? {})) {
-              const idx = Number(idxStr);
-              const row = mergedPlaylist[idx];
-              if (!row) continue;
-              const playlistBase = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
-              next[playlistTagKey(row.id)] = overlayFromForm(playlistBase, formTags);
-            }
-            for (const [, ent] of Object.entries(duplicateIdenticalFileTagsByIndex ?? {})) {
-              const fk = fileTagKey(ent.relativePath);
-              const fileBase = defaultTagsFromPlaylistTitle(ent.relativePath);
-              next[fk] = overlayFromForm(fileBase, ent.tags);
-            }
-            for (const [, ow] of Object.entries(duplicateOverwriteFileTagsByIndex ?? {})) {
-              for (const rel of ow.relativePaths) {
-                const fk = fileTagKey(rel);
-                delete next[fk];
-                const fileBase = defaultTagsFromPlaylistTitle(rel);
-                next[fk] = overlayFromForm(fileBase, ow.tags);
-              }
-            }
-            persistTagStore(next);
-            return next;
-          });
+          }
+          nextTagStoreForList = next;
+          setTagStore(next);
+          persistTagStore(next);
           if (playlistTagCopiesFromDb.length) {
             setInfoMessage(
               playlistTagCopiesFromDb.length === 1
@@ -2661,10 +2681,19 @@ export default function App() {
         if (edlLibraryAccess && loadedLibraryFile) {
           try {
             const dirSegments = loadedLibraryFile.parentSegments;
+            const tagsByRowId: Record<string, AudioTags> = {};
+            for (const row of mergedPlaylist) {
+              const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+              const overlay = playlistRowTagOverlay(row, nextTagStoreForList);
+              const merged = mergeWarnungForDisplay(mergeAudioTags(base, overlay));
+              if (!hasAnyAudioTagValue(merged) && merged.warnung !== true) continue;
+              tagsByRowId[row.id] = merged;
+            }
             const payload = serializePlaylistLibraryFile({
               v: 1,
               displayTitle: edlTitle,
               playlist: mergedPlaylist,
+              ...(Object.keys(tagsByRowId).length ? { tagsByRowId } : {}),
               tracksLinkedAtIso: new Date().toISOString(),
             });
             let listFileForPending: string | null = null;
@@ -2710,17 +2739,17 @@ export default function App() {
             }
             if (listFileForPending && sessionUserId && transferCustomerIdForPendingRef.current) {
               try {
-                await registerPlaylistPendingRequest({
+                await setPlaylistCustomerAssignmentRequest({
                   customerId: transferCustomerIdForPendingRef.current,
                   libraryOwnerUserId: sessionUserId,
                   parentSegments: dirSegments,
-                  playlistFileName: listFileForPending,
+                  fileName: listFileForPending,
                 });
               } catch (e) {
                 setError(
                   e instanceof Error
                     ? e.message
-                    : "Kunden-Vormerkung konnte nicht gespeichert werden (Transfer ist gespeichert)."
+                    : "Kundenzuweisung konnte nicht gespeichert werden (Transfer ist gespeichert)."
                 );
               }
             }
@@ -2744,6 +2773,11 @@ export default function App() {
             }
             return prev;
           });
+        }
+        if (transferCustomerIdForPendingRef.current && (!edlLibraryAccess || !loadedLibraryFile)) {
+          setError(
+            "Kundenzuweisung nur möglich, wenn die Playlist aus dem EDL- & Playlist Browser geöffnet ist."
+          );
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Export fehlgeschlagen.");
@@ -4752,6 +4786,7 @@ export default function App() {
                       onEdlFileRenamed={onEdlFileRenamed}
                       onEdlFolderMoved={onEdlFolderMoved}
                       readOnly={isCustomerUser}
+                      allowPlaylistRename={isAdmin}
                       activeLibraryFile={
                         loadedLibraryFile
                           ? {

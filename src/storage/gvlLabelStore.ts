@@ -110,7 +110,7 @@ export function saveGvlLabelDb(dbValue: GvlLabelDb): void {
 /** Vergleicht Labelcodes (z. B. „LC 97096“, „97096“) mit Einträgen aus der GVL-Liste. */
 export function normalizeLabelcodeForMatch(s: string): string {
   const d = s.replace(/\D/g, "");
-  if (d.length >= 2) return d;
+  if (d.length > 0) return d.replace(/^0+(?=\d)/, "");
   return s.trim().toLowerCase().replace(/\s+/g, "");
 }
 

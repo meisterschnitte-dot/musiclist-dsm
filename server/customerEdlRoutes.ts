@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
 import { bearerAuth, requireCustomerRole } from "./authMiddleware";
-import { isUserEmailInCustomerDirectory } from "./customersFs";
+import { getCustomerIdsForUserEmail, isUserEmailInCustomerDirectory } from "./customersFs";
 import {
   getAssignmentsForCustomer,
   removePlaylistAssignmentForCustomer,
@@ -16,16 +16,36 @@ import {
 type CustomerEdlAccess =
   | { ok: false; mode: "no_customer" }
   | { ok: false; mode: "email_not_in_customer_list" }
-  | { ok: true; customerId: string; assignments: PlaylistLibraryRef[] };
+  | { ok: true; customerIds: string[]; assignments: PlaylistLibraryRef[] };
+
+function refKey(r: PlaylistLibraryRef): string {
+  return JSON.stringify([r.libraryOwnerUserId, r.parentSegments, r.fileName]);
+}
 
 async function resolveCustomerEdlAccess(req: Request): Promise<CustomerEdlAccess> {
   const u = req.authUser!;
-  const customerId = u.customerId?.trim() ?? "";
-  if (!customerId) return { ok: false, mode: "no_customer" };
-  const allowed = await isUserEmailInCustomerDirectory(customerId, u.email);
-  if (!allowed) return { ok: false, mode: "email_not_in_customer_list" };
-  const assignments = await getAssignmentsForCustomer(customerId);
-  return { ok: true, customerId, assignments };
+  const fallbackId = u.customerId?.trim() ?? "";
+  const byEmail = await getCustomerIdsForUserEmail(u.email);
+  let customerIds = byEmail;
+  if (customerIds.length === 0 && fallbackId) {
+    const allowed = await isUserEmailInCustomerDirectory(fallbackId, u.email);
+    if (allowed) customerIds = [fallbackId];
+  }
+  if (customerIds.length === 0) {
+    return fallbackId ? { ok: false, mode: "email_not_in_customer_list" } : { ok: false, mode: "no_customer" };
+  }
+  const merged: PlaylistLibraryRef[] = [];
+  const seen = new Set<string>();
+  for (const cid of customerIds) {
+    const refs = await getAssignmentsForCustomer(cid);
+    for (const r of refs) {
+      const k = refKey(r);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(r);
+    }
+  }
+  return { ok: true, customerIds, assignments: merged };
 }
 
 function respondCustomerEdlForbidden(
@@ -84,7 +104,6 @@ function ownerLabel(ownerId: string): string {
 }
 
 function canReadFile(
-  customerId: string,
   ownerId: string,
   parentSegments: string[],
   fileName: string,
@@ -140,7 +159,7 @@ export function createCustomerEdlRouter(): Router {
         respondCustomerEdlForbidden(res, access.mode);
         return;
       }
-      const { customerId, assignments } = access;
+      const { assignments } = access;
       const segments = segmentsBody(req.body);
       const fileName = typeof req.body?.fileName === "string" ? req.body.fileName : "";
       if (segments.length < 1 || !fileName) {
@@ -149,7 +168,7 @@ export function createCustomerEdlRouter(): Router {
       }
       const ownerId = segments[0]!;
       const parentSegments = segments.slice(1);
-      if (!canReadFile(customerId, ownerId, parentSegments, fileName, assignments)) {
+      if (!canReadFile(ownerId, parentSegments, fileName, assignments)) {
         res.status(403).json({ error: "Kein Zugriff auf diese Datei." });
         return;
       }
@@ -167,7 +186,7 @@ export function createCustomerEdlRouter(): Router {
         respondCustomerEdlForbidden(res, access.mode);
         return;
       }
-      const { customerId, assignments } = access;
+      const { assignments } = access;
       const segments = segmentsBody(req.body);
       const fileName = typeof req.body?.fileName === "string" ? req.body.fileName : "";
       if (segments.length < 1 || !fileName) {
@@ -176,7 +195,7 @@ export function createCustomerEdlRouter(): Router {
       }
       const ownerId = segments[0]!;
       const parentSegments = segments.slice(1);
-      if (!canReadFile(customerId, ownerId, parentSegments, fileName, assignments)) {
+      if (!canReadFile(ownerId, parentSegments, fileName, assignments)) {
         res.status(403).json({ error: "Kein Zugriff auf diese Datei." });
         return;
       }
@@ -194,7 +213,7 @@ export function createCustomerEdlRouter(): Router {
         respondCustomerEdlForbidden(res, access.mode);
         return;
       }
-      const { customerId, assignments } = access;
+      const { customerIds, assignments } = access;
       const segments = segmentsBody(req.body);
       const fileName = typeof req.body?.fileName === "string" ? req.body.fileName.trim() : "";
       if (segments.length < 1 || !fileName) {
@@ -203,15 +222,17 @@ export function createCustomerEdlRouter(): Router {
       }
       const ownerId = segments[0]!;
       const parentSegments = segments.slice(1);
-      if (!canReadFile(customerId, ownerId, parentSegments, fileName, assignments)) {
+      if (!canReadFile(ownerId, parentSegments, fileName, assignments)) {
         res.status(403).json({ error: "Kein Zugriff auf diese Datei." });
         return;
       }
-      await removePlaylistAssignmentForCustomer(customerId, {
-        libraryOwnerUserId: ownerId,
-        parentSegments,
-        fileName,
-      });
+      for (const cid of customerIds) {
+        await removePlaylistAssignmentForCustomer(cid, {
+          libraryOwnerUserId: ownerId,
+          parentSegments,
+          fileName,
+        });
+      }
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ error: e instanceof Error ? e.message : "Löschen fehlgeschlagen." });

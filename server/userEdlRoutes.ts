@@ -62,7 +62,7 @@ export function createUserEdlRouter(): Router {
         if (e.kind !== "file") return e;
         const cust = customerByFile[e.name];
         if (!cust) return e;
-        return { ...e, label: `${e.name} - (${cust})` };
+        return { ...e, label: `${e.name} (${cust})` };
       });
       res.json({ entries: entriesWithLabels });
     } catch (e) {

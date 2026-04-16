@@ -13,10 +13,21 @@ function getSecret(): string {
 }
 
 export function signUserToken(userId: string): string {
+  const iat = Date.now();
   const exp = Date.now() + 14 * 24 * 60 * 60 * 1000;
-  const payload = Buffer.from(JSON.stringify({ sub: userId, exp }), "utf8").toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ sub: userId, iat, exp }), "utf8").toString("base64url");
   const sig = createHmac("sha256", getSecret()).update(payload).digest("base64url");
   return `${payload}.${sig}`;
+}
+
+function sessionWindowStartAtFiveLocal(nowMs: number): number {
+  const now = new Date(nowMs);
+  const start = new Date(now);
+  start.setHours(5, 0, 0, 0);
+  if (now.getTime() < start.getTime()) {
+    start.setDate(start.getDate() - 1);
+  }
+  return start.getTime();
 }
 
 export function verifyUserToken(token: string): { userId: string } | null {
@@ -33,7 +44,7 @@ export function verifyUserToken(token: string): { userId: string } | null {
   } catch {
     return null;
   }
-  let payload: { sub?: string; exp?: number };
+  let payload: { sub?: string; iat?: number; exp?: number };
   try {
     payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8")) as {
       sub?: string;
@@ -43,6 +54,8 @@ export function verifyUserToken(token: string): { userId: string } | null {
     return null;
   }
   if (typeof payload.sub !== "string" || !payload.sub) return null;
+  if (typeof payload.iat !== "number" || payload.iat <= 0) return null;
+  if (payload.iat < sessionWindowStartAtFiveLocal(Date.now())) return null;
   if (typeof payload.exp !== "number" || Date.now() > payload.exp) return null;
   return { userId: payload.sub };
 }

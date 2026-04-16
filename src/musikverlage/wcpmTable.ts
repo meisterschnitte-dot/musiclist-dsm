@@ -105,6 +105,8 @@ export type WcpmTagPayload = {
   composer: string;
   isrc: string;
   labelcode: string;
+  /** Manuelle Warnung aus Musikverlage-Datenbank (wie Tag-Editor-Checkbox). */
+  warnung?: boolean;
 };
 
 /** Eine Datenzeile (ohne Kopfzeile) in Tag-Felder übersetzen. */

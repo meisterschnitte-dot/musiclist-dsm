@@ -103,6 +103,8 @@ type Props = {
   onPlaylistListTagRefresh?: (files: EdlLibraryFileRef[]) => void | Promise<void>;
   /** Nur Admin: .list nachträglich einem Kunden zuweisen (freigegebene Ansicht). */
   onPlaylistCustomerAssign?: (file: EdlLibraryFileRef) => void;
+  /** Nur Admin: .list im Kontextmenü umbenennen. */
+  allowPlaylistRename?: boolean;
 };
 
 export function EdlLibraryPanel({
@@ -128,6 +130,7 @@ export function EdlLibraryPanel({
   readOnly = false,
   onPlaylistListTagRefresh,
   onPlaylistCustomerAssign,
+  allowPlaylistRename = false,
 }: Props) {
   const [cache, setCache] = useState<Record<string, EdlDirEntry[] | undefined>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -1175,7 +1178,10 @@ export function EdlLibraryPanel({
                 Umbenennen …
               </button>
             ) : null}
-            {contextMenu.kind === "file" && !readOnly && isPlaylistLibraryFileName(contextMenu.name) ? (
+            {contextMenu.kind === "file" &&
+            !readOnly &&
+            allowPlaylistRename &&
+            isPlaylistLibraryFileName(contextMenu.name) ? (
               <button
                 type="button"
                 className="edl-ctx-menu-item"

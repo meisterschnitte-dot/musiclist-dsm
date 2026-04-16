@@ -419,10 +419,29 @@ export function TagEditorModal({
             next.label = entry.label;
             next.hersteller = entry.hersteller;
             next.gvlRechte = entry.rechterueckrufe;
+          } else {
+            next.label = "";
+            next.hersteller = "";
+            next.gvlRechte = "";
           }
+        } else {
+          next.label = "";
+          next.hersteller = "";
+          next.gvlRechte = "";
         }
         return next;
       });
+      if (partial.warnung === true) {
+        setWarnToggle(true);
+      } else {
+        const db = gvlLabelDb ?? loadGvlLabelDb();
+        const lc = partial.labelcode?.trim() ?? "";
+        if (lc && !findGvlEntryByLabelcode(db, lc)) {
+          setWarnToggle(true);
+        } else if (lc) {
+          setWarnToggle(false);
+        }
+      }
     } catch (e) {
       setWcpmApiErr(e instanceof Error ? e.message : "WCPM-Lookup fehlgeschlagen.");
     } finally {
