@@ -93,7 +93,7 @@ export function createSharedTracksRouter(): Router {
   });
 
   /** Nach ID3-Änderung: Bearbeitungsdatum der Zeile aktualisieren. */
-  r.post("/shared/music-db/touch-tag-edited", async (req: Request, res: Response) => {
+  r.post("/shared/music-db/touch-tag-edited", requireAdmin, async (req: Request, res: Response) => {
     try {
       const relativePath = relativePathBody(req.body);
       if (!relativePath) {

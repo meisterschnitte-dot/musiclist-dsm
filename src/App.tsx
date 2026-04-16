@@ -1529,7 +1529,7 @@ export default function App() {
         setImportOverlay({ label: "Fertig", progress: 100 });
         await new Promise((r) => setTimeout(r, 220));
         setImportOverlay(null);
-        if (sessionUserId) {
+        if (sessionUserId && !isCustomerUser) {
           const state = await refreshMusicDbFromServer();
           const paths = state?.paths ?? [];
           const db = gvlLabelDb ?? loadGvlLabelDb();
@@ -1570,7 +1570,7 @@ export default function App() {
         return false;
       }
     },
-    [sessionUserId, refreshMusicDbFromServer, gvlLabelDb]
+    [sessionUserId, isCustomerUser, refreshMusicDbFromServer, gvlLabelDb]
   );
 
   /** Liest ID3 von allen in den .list-Dateien verknüpften MP3s und schreibt sie in den Tag-Store (Tabellenanzeige). */
