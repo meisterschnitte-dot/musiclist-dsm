@@ -27,7 +27,7 @@ import {
   updateWcpmDbRow,
 } from "./musikverlageSqlite";
 
-const MAX_UPLOAD_MB = 250;
+const MAX_UPLOAD_MB = Number.parseInt(process.env.MUSIKVERLAGE_MAX_UPLOAD_MB ?? "1024", 10) || 1024;
 
 const uploadXlsx = multer({
   storage: multer.diskStorage({

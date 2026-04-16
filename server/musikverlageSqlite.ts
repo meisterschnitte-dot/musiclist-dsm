@@ -84,10 +84,10 @@ export function rebuildMusikverlagTableDb(
 
 function readFirstSheetRows(excelPath: string): { sheetName: string; rows: unknown[][] } {
   const ext = path.extname(excelPath).toLowerCase();
-  const wb =
-    ext === ".csv"
-      ? XLSX.readFile(excelPath, { type: "file", FS: ";" })
-      : XLSX.readFile(excelPath);
+  if (ext === ".csv") {
+    return { sheetName: path.basename(excelPath), rows: readCsvRows(excelPath) };
+  }
+  const wb = XLSX.readFile(excelPath);
   const sheetName = wb.SheetNames[0];
   if (!sheetName) throw new Error("Excel-Datei enthält keine Tabelle.");
   const ws = wb.Sheets[sheetName];
@@ -98,6 +98,43 @@ function readFirstSheetRows(excelPath: string): { sheetName: string; rows: unkno
     raw: false,
   }) as unknown[][];
   return { sheetName, rows };
+}
+
+function parseCsvSemicolonLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ";" && !inQuotes) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+function readCsvRows(csvPath: string): unknown[][] {
+  const raw = fs.readFileSync(csvPath, "utf8");
+  const lines = raw.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const rows = lines.map((ln) => parseCsvSemicolonLine(ln));
+  if (rows[0]?.[0]?.charCodeAt(0) === 0xfeff) {
+    rows[0][0] = rows[0][0].slice(1);
+  }
+  return rows;
 }
 
 function rebuildWcpmDb(excelPaths: string[], id: MusikverlagId): RebuildMusikverlagDbResult {
