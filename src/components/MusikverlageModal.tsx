@@ -95,15 +95,19 @@ export function MusikverlageModal({ open, onClose }: Props) {
   }, [data, apiDraft, reload]);
 
   const onPickFile = useCallback(
-    async (id: MusikverlagId, file: File | null, mode: "replace" | "append") => {
-      if (!file) return;
+    async (id: MusikverlagId, files: File[], mode: "replace" | "append") => {
+      if (!files.length) return;
       setErr(null);
       setUploadBusyId(id);
       try {
-        if (mode === "append") {
-          await appendMusikverlageXlsx(id, file);
-        } else {
-          await uploadMusikverlageXlsx(id, file);
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i]!;
+          const effectiveMode = mode === "append" || i > 0 ? "append" : "replace";
+          if (effectiveMode === "append") {
+            await appendMusikverlageXlsx(id, file);
+          } else {
+            await uploadMusikverlageXlsx(id, file);
+          }
         }
         await reload();
       } catch (e) {
@@ -274,20 +278,28 @@ export function MusikverlageModal({ open, onClose }: Props) {
                                 type="button"
                                 className="btn-modal musikverlage-file-action-btn"
                                 disabled={ub || !hasAnyFiles}
-                                onClick={() => void onRemoveFile(row.id)}
+                                onClick={() => {
+                                  const ok = window.confirm(
+                                    `Importierte Daten für „${row.label}“ wirklich entfernen?\n\n` +
+                                      "Die hochgeladenen Tabellen und die erzeugte Musikverlag-Datenbank werden gelöscht."
+                                  );
+                                  if (!ok) return;
+                                  void onRemoveFile(row.id);
+                                }}
                               >
                                 Entfernen
                               </button>
                               <label className="musikverlage-upload-label musikverlage-upload-label--grid">
                                 <input
                                   type="file"
+                                  multiple
                                   accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                                   className="visually-hidden"
                                   disabled={ub}
                                   onChange={(ev) => {
-                                    const file = ev.currentTarget.files?.[0] ?? null;
+                                    const files = [...(ev.currentTarget.files ?? [])];
                                     ev.currentTarget.value = "";
-                                    void onPickFile(row.id, file, "replace");
+                                    void onPickFile(row.id, files, "replace");
                                   }}
                                 />
                                 <span className="btn-modal musikverlage-file-action-btn">
@@ -297,13 +309,14 @@ export function MusikverlageModal({ open, onClose }: Props) {
                               <label className="musikverlage-upload-label musikverlage-upload-label--grid">
                                 <input
                                   type="file"
+                                  multiple
                                   accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                                   className="visually-hidden"
                                   disabled={ub}
                                   onChange={(ev) => {
-                                    const file = ev.currentTarget.files?.[0] ?? null;
+                                    const files = [...(ev.currentTarget.files ?? [])];
                                     ev.currentTarget.value = "";
-                                    void onPickFile(row.id, file, "append");
+                                    void onPickFile(row.id, files, "append");
                                   }}
                                 />
                                 <span className="btn-modal musikverlage-file-action-btn">
