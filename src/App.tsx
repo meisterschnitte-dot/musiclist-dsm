@@ -840,6 +840,11 @@ export default function App() {
     useState<UserSessionSyncConflictPayload | null>(null);
   const [sessionSyncForceBusy, setSessionSyncForceBusy] = useState(false);
   const sessionSyncClientIdRef = useRef<string>(getOrCreateSessionSyncClientId());
+  const sessionSyncPutInFlightRef = useRef(false);
+  const sessionSyncPendingRef = useRef<{
+    workspace: PersistedWorkspaceV1 | null;
+    tagStore: TagStore;
+  } | null>(null);
   const tagStoreRef = useRef<TagStore>({} as TagStore);
   tagStoreRef.current = tagStore;
   /** GVL-Abgleich: zeilenweise Vorher/Nachher oder nur Hinweis bei fehlenden Labelcodes. */
@@ -1125,10 +1130,14 @@ export default function App() {
       setSessionSyncReady(false);
       sessionSyncServerRevisionRef.current = null;
       setSessionSyncConflict(null);
+      sessionSyncPutInFlightRef.current = false;
+      sessionSyncPendingRef.current = null;
       return;
     }
     setSessionSyncReady(false);
     sessionSyncServerRevisionRef.current = null;
+    sessionSyncPutInFlightRef.current = false;
+    sessionSyncPendingRef.current = null;
     let cancelled = false;
     void (async () => {
       let w: PersistedWorkspaceV1 | null = null;
@@ -1282,6 +1291,52 @@ export default function App() {
     };
   }, [sessionUserId, refreshMusicDbFromServer, isCustomerUser]);
 
+  /**
+   * Anti-Race: nur ein Session-PUT gleichzeitig.
+   * Während ein Request läuft, wird nur der letzte Stand gepuffert und danach gesendet.
+   */
+  const flushSessionSyncQueue = useCallback(async () => {
+    if (!sessionUserId || sessionSyncPutInFlightRef.current) return;
+    sessionSyncPutInFlightRef.current = true;
+    try {
+      while (sessionUserId) {
+        const pending = sessionSyncPendingRef.current;
+        if (!pending) break;
+        sessionSyncPendingRef.current = null;
+        try {
+          const put = await apiUserSessionSyncPut({
+            workspace: pending.workspace,
+            tagStore: pending.tagStore,
+            baseUpdatedAt: sessionSyncServerRevisionRef.current,
+            clientId: sessionSyncClientIdRef.current,
+          });
+          if (put.ok) {
+            sessionSyncServerRevisionRef.current = put.updatedAt;
+          } else {
+            setSessionSyncConflict(put.conflict);
+            sessionSyncPendingRef.current = null;
+            break;
+          }
+        } catch {
+          /* offline */
+        }
+      }
+    } finally {
+      sessionSyncPutInFlightRef.current = false;
+    }
+  }, [sessionUserId]);
+
+  const enqueueSessionSyncPut = useCallback(
+    (payload: { workspace: PersistedWorkspaceV1 | null; tagStore: TagStore }) => {
+      if (!sessionUserId) return;
+      sessionSyncPendingRef.current = payload;
+      if (!sessionSyncPutInFlightRef.current) {
+        void flushSessionSyncQueue();
+      }
+    },
+    [sessionUserId, flushSessionSyncQueue]
+  );
+
   useEffect(() => {
     setEdlSelectedRowIndices(new Set());
     setEdlSelectionAnchorPlaylistIndex(null);
@@ -1392,23 +1447,7 @@ export default function App() {
     const ws = workspaceFromAppState(playlist, fileName, edlTitle, edlRawText);
     const store = tagStore;
     const id = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const put = await apiUserSessionSyncPut({
-            workspace: ws,
-            tagStore: store,
-            baseUpdatedAt: sessionSyncServerRevisionRef.current,
-            clientId: sessionSyncClientIdRef.current,
-          });
-          if (put.ok) {
-            sessionSyncServerRevisionRef.current = put.updatedAt;
-          } else {
-            setSessionSyncConflict(put.conflict);
-          }
-        } catch {
-          /* offline */
-        }
-      })();
+      enqueueSessionSyncPut({ workspace: ws, tagStore: store });
     }, 2200);
     return () => window.clearTimeout(id);
   }, [
@@ -1419,6 +1458,7 @@ export default function App() {
     edlTitle,
     edlRawText,
     tagStore,
+    enqueueSessionSyncPut,
   ]);
 
   const applySessionSyncServerPayload = useCallback(
