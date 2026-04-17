@@ -440,6 +440,22 @@ function msUntilNextDailyFiveAm(nowMs: number = Date.now()): number {
   return Math.max(250, next.getTime() - now.getTime());
 }
 
+function getOrCreateSessionSyncClientId(): string {
+  const key = "musiclist-session-sync-client-id-v1";
+  try {
+    const prev = sessionStorage.getItem(key);
+    if (prev && prev.trim()) return prev;
+    const next =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem(key, next);
+    return next;
+  } catch {
+    return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
 type ImportOverlayState = { label: string; progress: number };
 
 /** Erstimport (Datei/Menü/Drop) vs. erneutes Öffnen aus dem EDL- & Playlist Browser */
@@ -823,6 +839,7 @@ export default function App() {
   const [sessionSyncConflict, setSessionSyncConflict] =
     useState<UserSessionSyncConflictPayload | null>(null);
   const [sessionSyncForceBusy, setSessionSyncForceBusy] = useState(false);
+  const sessionSyncClientIdRef = useRef<string>(getOrCreateSessionSyncClientId());
   const tagStoreRef = useRef<TagStore>({} as TagStore);
   tagStoreRef.current = tagStore;
   /** GVL-Abgleich: zeilenweise Vorher/Nachher oder nur Hinweis bei fehlenden Labelcodes. */
@@ -1165,6 +1182,7 @@ export default function App() {
             workspace: w,
             tagStore: tags,
             baseUpdatedAt: null,
+            clientId: sessionSyncClientIdRef.current,
           });
           if (put.ok) {
             sessionSyncServerRevisionRef.current = put.updatedAt;
@@ -1380,6 +1398,7 @@ export default function App() {
             workspace: ws,
             tagStore: store,
             baseUpdatedAt: sessionSyncServerRevisionRef.current,
+            clientId: sessionSyncClientIdRef.current,
           });
           if (put.ok) {
             sessionSyncServerRevisionRef.current = put.updatedAt;
@@ -1454,6 +1473,7 @@ export default function App() {
         workspace: ws,
         tagStore: tagStore,
         force: true,
+        clientId: sessionSyncClientIdRef.current,
       });
       if (put.ok) {
         sessionSyncServerRevisionRef.current = put.updatedAt;

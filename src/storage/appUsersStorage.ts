@@ -13,6 +13,14 @@ export type AppUserRecord = {
   customerId?: string;
   /** Fehlt: gilt als aktiv. */
   active?: boolean;
+  /** Server-Präsenz (Admin-Liste): innerhalb Aktivitätsfenster aktiv. */
+  loggedIn?: boolean;
+  /** Mehr als eine aktive Client-Session im Aktivitätsfenster. */
+  doubleLogin?: boolean;
+  /** Anzahl aktiver Clients (nur Diagnostik/Anzeige). */
+  activeClientCount?: number;
+  /** Letzter Session-Sync vom Server. */
+  lastSeenAtIso?: string | null;
 };
 
 export function normalizeEmail(email: string): string {

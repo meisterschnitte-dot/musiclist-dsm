@@ -6,6 +6,7 @@ import type { MusikverlagId } from "../src/musikverlage/musikverlageCatalog";
 import {
   parseWcpmHeaderRow,
   wcpmFilenameStem,
+  wcpmFilenameStemMatchKey,
   wcpmRowToTagPayload,
   type WcpmTagPayload,
 } from "../src/musikverlage/wcpmTable";
@@ -233,16 +234,26 @@ export function lookupWcpmPayloadFromDb(fileName: string): WcpmTagPayload | null
   const id: MusikverlagId = "wcpm";
   if (!musikverlagSqliteExists(id)) return null;
   const stem = wcpmFilenameStem(fileName);
+  const matchKey = wcpmFilenameStemMatchKey(fileName);
   if (!stem) return null;
   const db = new Database(sqlitePathForMusikverlag(id), { readonly: true });
   try {
     const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
     if (fmt?.v !== "wcpm_v1") return null;
-    const row = db
+    const rowExact = db
       .prepare("SELECT payload_json FROM wcpm_tracks WHERE filename_stem = ?")
       .get(stem) as { payload_json: string } | undefined;
-    if (!row?.payload_json) return null;
-    return JSON.parse(row.payload_json) as WcpmTagPayload;
+    if (rowExact?.payload_json) {
+      return JSON.parse(rowExact.payload_json) as WcpmTagPayload;
+    }
+    if (!matchKey) return null;
+    const rowFuzzy = db
+      .prepare(
+        "SELECT payload_json FROM wcpm_tracks WHERE REPLACE(REPLACE(REPLACE(filename_stem, '_', ''), ' ', ''), '-', '') = ? LIMIT 1"
+      )
+      .get(matchKey) as { payload_json: string } | undefined;
+    if (!rowFuzzy?.payload_json) return null;
+    return JSON.parse(rowFuzzy.payload_json) as WcpmTagPayload;
   } finally {
     db.close();
   }

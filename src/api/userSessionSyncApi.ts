@@ -56,6 +56,8 @@ export async function apiUserSessionSyncPut(payload: {
   /** Weglassen = altes Verhalten ohne Konfliktprüfung (nur für Kompatibilität). */
   baseUpdatedAt?: string | null;
   force?: boolean;
+  /** Pro Browser-Tab/-Fenster stabil; dient der Doppel-Login-Erkennung. */
+  clientId?: string;
 }): Promise<UserSessionSyncPutResult> {
   const body: Record<string, unknown> = {
     workspace: payload.workspace,
@@ -66,6 +68,9 @@ export async function apiUserSessionSyncPut(payload: {
   }
   if (payload.force) {
     body.force = true;
+  }
+  if (payload.clientId?.trim()) {
+    body.clientId = payload.clientId.trim();
   }
   const res = await fetch(`${API}/me/session-sync`, {
     method: "PUT",

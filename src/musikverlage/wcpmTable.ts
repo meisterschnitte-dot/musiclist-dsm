@@ -24,6 +24,17 @@ export function wcpmFilenameStem(pathOrFileName: string): string {
   return stripAudioExtensionForMatch(base).trim().toLowerCase();
 }
 
+/**
+ * Fehlertoleranter Vergleichsschlüssel für WCPM-Dateinamen.
+ * Ignoriert Trennzeichen wie Leerzeichen/Unterstrich/Bindestrich:
+ * `AA273_01_Pure Energy` == `AA273 01 Pure Energy`.
+ */
+export function wcpmFilenameStemMatchKey(pathOrFileName: string): string {
+  const stem = wcpmFilenameStem(pathOrFileName);
+  if (!stem) return "";
+  return stem.replace(/[\s_-]+/g, "");
+}
+
 export type WcpmHeaderMap = {
   filenameCol: number;
   labelcodeIdx: number | null;
@@ -144,6 +155,7 @@ export function findWcpmRowByStem(
   fileNameOrPath: string
 ): { rowIndex: number; row: unknown[] } | null {
   const want = wcpmFilenameStem(fileNameOrPath);
+  const wantMatchKey = wcpmFilenameStemMatchKey(fileNameOrPath);
   if (!want) return null;
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -152,6 +164,9 @@ export function findWcpmRowByStem(
     if (!cell) continue;
     const stem = wcpmFilenameStem(cell);
     if (stem === want) {
+      return { rowIndex: r, row };
+    }
+    if (wantMatchKey && wcpmFilenameStemMatchKey(cell) === wantMatchKey) {
       return { rowIndex: r, row };
     }
   }

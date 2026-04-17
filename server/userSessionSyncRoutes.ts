@@ -36,6 +36,8 @@ export function createUserSessionSyncRouter(): Router {
       const workspace = (body as { workspace?: unknown }).workspace;
       const tagStore = (body as { tagStore?: unknown }).tagStore;
       const force = (body as { force?: unknown }).force === true;
+      const clientIdRaw = (body as { clientId?: unknown }).clientId;
+      const clientId = typeof clientIdRaw === "string" ? clientIdRaw.trim().slice(0, 128) : "";
       const baseRaw = (body as { baseUpdatedAt?: unknown }).baseUpdatedAt;
       let baseUpdatedAt: string | null | undefined;
       if (baseRaw === undefined) {
@@ -59,6 +61,7 @@ export function createUserSessionSyncRouter(): Router {
       const payload = {
         workspace: workspace === undefined ? null : workspace,
         tagStore: tagStore === undefined ? null : tagStore,
+        ...(clientId ? { clientId } : {}),
       };
 
       if (!force) {

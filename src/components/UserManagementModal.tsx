@@ -57,6 +57,7 @@ export function UserManagementModal({
   const [editRole, setEditRole] = useState<UserRole>("user");
   const [editCompany, setEditCompany] = useState("");
   const [editActive, setEditActive] = useState(true);
+  const [listFilter, setListFilter] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -71,6 +72,7 @@ export function UserManagementModal({
     if (!open) {
       setEditingUser(null);
       setNewCustomerPick("");
+      setListFilter("");
     }
   }, [open]);
 
@@ -116,6 +118,21 @@ export function UserManagementModal({
   }, [editingUser, customersList]);
 
   const companyDatalistId = useMemo(() => "user-mgmt-company-datalist", []);
+  const filteredUsers = useMemo(() => {
+    const q = listFilter.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) => {
+      const roleLabel =
+        u.role === "admin" ? "administrator" : u.role === "customer" ? "kunde" : "benutzer";
+      return (
+        u.firstName.toLowerCase().includes(q) ||
+        u.lastName.toLowerCase().includes(q) ||
+        u.email.toLowerCase().includes(q) ||
+        (u.companyName ?? "").toLowerCase().includes(q) ||
+        roleLabel.includes(q)
+      );
+    });
+  }, [users, listFilter]);
 
   const onNewCustomerPickChange = useCallback(
     (value: string) => {
@@ -391,6 +408,25 @@ export function UserManagementModal({
         {err && <p className="user-auth-err modal-lead">{err}</p>}
         {info && <p className="modal-lead" style={{ color: "var(--muted, #666)" }}>{info}</p>}
 
+        <div className="user-mgmt-filter-row">
+          <input
+            type="search"
+            className="user-mgmt-filter-input"
+            placeholder="Benutzer filtern (Name, E-Mail, Firma, Rolle) …"
+            value={listFilter}
+            onChange={(e) => setListFilter(e.target.value)}
+            autoComplete="off"
+          />
+          {listFilter.trim() ? (
+            <button
+              type="button"
+              className="btn-cell btn-cell--soft btn-cell--compact"
+              onClick={() => setListFilter("")}
+            >
+              Filter löschen
+            </button>
+          ) : null}
+        </div>
         <div className="user-mgmt-list-wrap">
           <table className="table-dense user-mgmt-table">
             <thead>
@@ -401,11 +437,13 @@ export function UserManagementModal({
                 <th>Firma</th>
                 <th>Rolle</th>
                 <th>Status</th>
+                <th>Eingeloggt</th>
+                <th>Doppellogin</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {filteredUsers.map((u) => (
                 <tr
                   key={u.id}
                   className={!isUserRecordActive(u) ? "user-mgmt-row-inactive" : undefined}
@@ -449,6 +487,23 @@ export function UserManagementModal({
                     </label>
                   </td>
                   <td>
+                    <span className={u.loggedIn ? "user-mgmt-presence user-mgmt-presence--online" : "user-mgmt-presence"}>
+                      {u.loggedIn ? "Ja" : "Nein"}
+                      {u.loggedIn && (u.activeClientCount ?? 0) > 0 ? ` (${u.activeClientCount})` : ""}
+                    </span>
+                  </td>
+                  <td>
+                    <span
+                      className={
+                        u.doubleLogin
+                          ? "user-mgmt-presence user-mgmt-presence--double"
+                          : "user-mgmt-presence"
+                      }
+                    >
+                      {u.doubleLogin ? "Ja" : "Nein"}
+                    </span>
+                  </td>
+                  <td>
                     <div className="user-mgmt-row-actions">
                       <button
                         type="button"
@@ -477,6 +532,13 @@ export function UserManagementModal({
                   </td>
                 </tr>
               ))}
+              {filteredUsers.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="user-mgmt-empty">
+                    Keine Benutzer für den aktuellen Filter.
+                  </td>
+                </tr>
+              ) : null}
             </tbody>
           </table>
         </div>

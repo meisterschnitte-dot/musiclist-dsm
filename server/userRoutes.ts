@@ -17,6 +17,7 @@ import {
   withUserMutation,
 } from "./userStore";
 import { syncCustomerForInvite } from "./customerUserSync";
+import { readUserSessionPresenceMap } from "./userSessionSyncFs";
 import { toPublicUser, type PublicUser, type UserRole, type StoredUser } from "./userTypes";
 
 type BootstrapMutResult =
@@ -128,8 +129,25 @@ export function createUserApiRouter(): Router {
     res.json({ user: toPublicUser(req.authUser!) });
   });
 
-  r.get("/users", bearerAuth, requireAdmin, (_req, res) => {
-    res.json({ users: listUsers().map(toPublicUser) });
+  r.get("/users", bearerAuth, requireAdmin, async (_req, res) => {
+    const presenceByUserId = await readUserSessionPresenceMap();
+    const users = listUsers().map((u) => {
+      const base = toPublicUser(u) as PublicUser & {
+        loggedIn?: boolean;
+        doubleLogin?: boolean;
+        activeClientCount?: number;
+        lastSeenAtIso?: string | null;
+      };
+      const p = presenceByUserId[u.id];
+      return {
+        ...base,
+        loggedIn: p?.loggedIn === true,
+        doubleLogin: p?.doubleLogin === true,
+        activeClientCount: p?.activeClientCount ?? 0,
+        lastSeenAtIso: p?.lastSeenAtIso ?? null,
+      };
+    });
+    res.json({ users });
   });
 
   r.post("/users/invite", bearerAuth, requireAdmin, async (req, res) => {
