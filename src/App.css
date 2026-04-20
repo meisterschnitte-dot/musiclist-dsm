@@ -3151,6 +3151,141 @@ body {
   min-height: 0;
 }
 
+/** Hinweis unter den Buttons im Tag-Editor (z. B. keine automatische DB-Treffer) */
+.tag-editor-musicdb-footer-hint {
+  margin: 0.65rem 0 0;
+  padding: 0.4rem 0.25rem 0;
+  border-top: 1px solid var(--app-border-strong);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--app-text-muted);
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.btn-modal--manual-music-search .btn-tag-manual-search-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+
+.btn-modal--manual-music-search .btn-tag-manual-search-icon svg {
+  display: block;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.modal-backdrop--tag-manual-db {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem min(1rem, 2vw);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal--tag-manual-db {
+  max-width: min(98vw, 1680px);
+  width: 100%;
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tag-manual-db-lead {
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.tag-manual-db-filter-label {
+  display: block;
+  margin: 0.65rem 0 0.25rem;
+  font-size: 0.78rem;
+  color: var(--app-text-muted);
+}
+
+.tag-manual-db-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.45rem;
+}
+
+.tag-manual-db-count {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  color: var(--app-text-muted);
+}
+
+.tag-manual-db-table-scroll {
+  flex: 1;
+  min-height: 0;
+  max-height: min(52vh, 560px);
+  overflow: auto;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 8px;
+  background: var(--app-surface-card);
+}
+
+.tag-manual-db-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.tag-manual-db-th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--app-surface-input);
+  border-bottom: 1px solid var(--app-border-strong);
+  box-shadow: 0 1px 0 var(--app-border-strong);
+  color: var(--app-text-secondary);
+}
+
+.tag-manual-db-tr {
+  cursor: pointer;
+}
+
+.tag-manual-db-tr:nth-child(even) {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.tag-manual-db-tr:hover {
+  background: var(--app-surface-input);
+}
+
+.tag-manual-db-tr--selected {
+  background: var(--app-accent-soft, rgba(100, 149, 237, 0.22)) !important;
+  outline: 1px solid var(--app-border-strong);
+  outline-offset: -1px;
+}
+
+.tag-manual-db-td {
+  padding: 0.28rem 0.45rem;
+  border-bottom: 1px solid var(--app-border-subtle, var(--app-border-strong));
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.tag-manual-db-td.mono-cell {
+  max-width: min(28rem, 40vw);
+}
+
 .tag-filename-wrap {
   flex-shrink: 0;
   margin: 0 0 0.75rem;

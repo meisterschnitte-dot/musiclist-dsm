@@ -2133,10 +2133,7 @@ export default function App() {
         }
 
         if (conflicts.length === 0) {
-          setError(
-            "Kein weiterer passender Titel in der Musikdatenbank (gleicher oder sehr ähnlicher Dateiname)."
-          );
-          return;
+          return { noFurtherMatch: true as const };
         }
 
         const candidateTagsByPath = await loadCandidateTagsFromSharedMusicDb(
@@ -2190,8 +2187,73 @@ export default function App() {
       } catch (e) {
         setError(e instanceof Error ? e.message : "Musikdatenbank-Suche fehlgeschlagen.");
       }
+      return undefined;
     },
     [sessionUserId, tagModal, playlist, askDuplicate]
+  );
+
+  /** MP3 aus der Server-Musikdatenbank dem aktuell bearbeiteten Eintrag zuordnen (Playlist oder Datei-Ansicht). */
+  const onManualAssignMusicDbTrack = useCallback(
+    async (relativePath: string) => {
+      if (!sessionUserId) {
+        setError("Bitte anmelden.");
+        return;
+      }
+      const tm = tagModal;
+      if (!tm || tm.kind === "playlistMulti" || tm.kind === "fileMulti") return;
+
+      const norm = relativePath.trim().replace(/\\/g, "/");
+      if (!isMp3FileName(norm)) {
+        setError("Bitte eine MP3-Datei aus der Liste wählen.");
+        return;
+      }
+
+      try {
+        if (tm.kind === "playlist") {
+          if (!playlist) return;
+          const row = playlist[tm.index];
+          const newRow = { ...row, linkedTrackFileName: norm };
+          setPlaylist((prev) => {
+            if (!prev) return prev;
+            return prev.map((r, i) => (i === tm.index ? newRow : r));
+          });
+
+          let id3: AudioTags = {};
+          try {
+            const buf = await apiSharedTracksReadBinary(norm);
+            const file = new File([buf], basenamePath(norm), { type: "audio/mpeg" });
+            id3 = await readAudioTagsFromBlob(file);
+          } catch {
+            /* optional */
+          }
+          const base = defaultTagsFromPlaylistTitle(newRow.linkedTrackFileName ?? newRow.title);
+          const merged = mergeWarnungForDisplay(
+            mergeAudioTags(mergeAudioTags(base, playlistRowTagOverlay(newRow, tagStoreRef.current)), id3)
+          );
+          setTagEditInitial(merged);
+        } else {
+          setTagModal({ kind: "file", fileName: norm });
+          let id3: AudioTags = {};
+          try {
+            const buf = await apiSharedTracksReadBinary(norm);
+            const file = new File([buf], basenamePath(norm), { type: "audio/mpeg" });
+            id3 = await readAudioTagsFromBlob(file);
+          } catch {
+            /* optional */
+          }
+          const base = defaultTagsFromPlaylistTitle(norm);
+          const row = playlist?.find((r) => r.linkedTrackFileName === norm);
+          const overlay = row
+            ? playlistRowTagOverlay(row, tagStoreRef.current)
+            : tagStoreRef.current[fileTagKey(norm)] ?? {};
+          const merged = mergeWarnungForDisplay(mergeAudioTags(mergeAudioTags(base, overlay), id3));
+          setTagEditInitial(merged);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Zuordnung fehlgeschlagen.");
+      }
+    },
+    [sessionUserId, tagModal, playlist]
   );
 
   const openPlaylistTags = useCallback(
@@ -3643,6 +3705,29 @@ export default function App() {
     }
     return map;
   }, [mp3KnownFromPlaylist, playlist, tagStore]);
+
+  /** Manuelle MP3-Suche im Tag-Editor: gleiche Zelltexte wie in der Musikdatenbank-Tabelle. */
+  const getManualMusicDbRowDisplayCells = useCallback(
+    (relativePath: string, displayIndexOneBased: number) => {
+      const name = relativePath.trim().replace(/\\/g, "/");
+      const base = defaultTagsFromPlaylistTitle(name);
+      const linkedRow = playlist?.find((r) => r.linkedTrackFileName === name);
+      const overlay = linkedRow
+        ? playlistRowTagOverlay(linkedRow, tagStore)
+        : tagStore[fileTagKey(name)] ?? {};
+      let merged = mergeWarnungForDisplay(mergeAudioTags(base, overlay));
+      const anyPlaylistWarnung = playlist?.some((r) => {
+        if (r.linkedTrackFileName !== name) return false;
+        const b = defaultTagsFromPlaylistTitle(r.linkedTrackFileName ?? r.title);
+        return (
+          mergeWarnungForDisplay(mergeAudioTags(b, playlistRowTagOverlay(r, tagStore))).warnung === true
+        );
+      });
+      if (anyPlaylistWarnung) merged = { ...merged, warnung: true };
+      return buildMp3RowCellsMap(name, merged, displayIndexOneBased, musicDbMetadata[name]);
+    },
+    [playlist, tagStore, musicDbMetadata]
+  );
 
   /** In der Kundenansicht gelten Filter nur für die angezeigten Export-Spalten (ohne Titel/Jahr). */
   const edlFilterColumnIdsForPlaylist = useMemo(
@@ -5609,6 +5694,9 @@ export default function App() {
           showGvlDatabaseButton={isAdmin}
           onOpenGvlDatabase={onOpenSystemSettings}
           onMusicDatabaseSearch={onTagEditorMusicDbSearch}
+          onManualMusicDbAssign={onManualAssignMusicDbTrack}
+          manualMusicDbColumnIds={mp3VisibleColumnIds}
+          getManualMusicDbRowCells={getManualMusicDbRowDisplayCells}
           onClose={closeTagModal}
           onSave={saveTagModal}
         />

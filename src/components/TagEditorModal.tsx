@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent,
@@ -71,6 +72,15 @@ import {
   parseExtremeMusicMetadataText,
 } from "../audio/parseExtremeMusicMetadataText";
 import { lookupWcpmTags } from "../api/musikverlageApi";
+import { apiSharedMusicDbFetch } from "../api/sharedTracksApi";
+import { basenamePath } from "../tracks/sanitizeFilename";
+import {
+  getMp3ColumnLabel,
+  MP3_TABLE_ALL_COLUMN_IDS,
+  type Mp3TableColumnId,
+} from "../mp3TableLayout";
+
+export type TagEditorMusicDbAutoSearchResult = { noFurtherMatch: true };
 
 type TagFormFields = Record<Exclude<keyof AudioTags, "warnung">, string>;
 
@@ -153,7 +163,18 @@ type Props = {
    * Server-Musikdatenbank: gleiche Trefferlogik wie „Transfer to MP3“ (exakter/ähnlicher Dateiname).
    * Erhält aktuelle Tag-Felder aus dem Formular.
    */
-  onMusicDatabaseSearch?: (getCurrentTags: () => AudioTags) => void | Promise<void>;
+  onMusicDatabaseSearch?: (
+    getCurrentTags: () => AudioTags
+  ) => void | Promise<void | TagEditorMusicDbAutoSearchResult>;
+  /** MP3-Pfad aus manueller Suche dem bearbeiteten Eintrag zuordnen. */
+  onManualMusicDbAssign?: (relativePath: string) => void | Promise<void>;
+  /** Sichtbare Spalten wie in der Musikdatenbank (Reihenfolge). */
+  manualMusicDbColumnIds?: Mp3TableColumnId[] | null;
+  /** Zelltexte je Spalte wie in der Haupttabelle (`buildMp3RowCellsMap`). */
+  getManualMusicDbRowCells?: (
+    relativePath: string,
+    displayIndexOneBased: number
+  ) => Record<Mp3TableColumnId, string>;
   onClose: () => void;
   onSave: OnSaveTag;
 };
@@ -169,6 +190,9 @@ export function TagEditorModal({
   showGvlDatabaseButton = true,
   onOpenGvlDatabase,
   onMusicDatabaseSearch,
+  onManualMusicDbAssign,
+  manualMusicDbColumnIds = null,
+  getManualMusicDbRowCells,
   onClose,
   onSave,
 }: Props) {
@@ -191,6 +215,14 @@ export function TagEditorModal({
   const [wcpmApiErr, setWcpmApiErr] = useState<string | null>(null);
   const [labelcodeLookupHint, setLabelcodeLookupHint] = useState<string | null>(null);
   const [musicDbSearchBusy, setMusicDbSearchBusy] = useState(false);
+  const [musicDbNoMatchHint, setMusicDbNoMatchHint] = useState<string | null>(null);
+  const [manualSearchOpen, setManualSearchOpen] = useState(false);
+  const [manualAllPaths, setManualAllPaths] = useState<string[]>([]);
+  const [manualPathsBusy, setManualPathsBusy] = useState(false);
+  const [manualPathsErr, setManualPathsErr] = useState<string | null>(null);
+  const [manualSearchQuery, setManualSearchQuery] = useState("");
+  const [manualSelectedPath, setManualSelectedPath] = useState<string | null>(null);
+  const [manualAssignBusy, setManualAssignBusy] = useState(false);
 
   const applyFilenameSelectionToField = useCallback(
     (field: (typeof FILENAME_TARGET_FIELDS)[number]["key"], text: string) => {
@@ -226,7 +258,73 @@ export function TagEditorModal({
     setBlankframeApiErr(null);
     setWcpmApiErr(null);
     setLabelcodeLookupHint(null);
+    setMusicDbNoMatchHint(null);
   }, [open, initial, multiTrack]);
+
+  useEffect(() => {
+    if (!manualSearchOpen || !open) return;
+    let cancelled = false;
+    setManualPathsErr(null);
+    setManualPathsBusy(true);
+    void (async () => {
+      try {
+        const { paths } = await apiSharedMusicDbFetch();
+        if (!cancelled) setManualAllPaths(paths);
+      } catch (e) {
+        if (!cancelled) {
+          setManualPathsErr(e instanceof Error ? e.message : "Musikdatenbank konnte nicht geladen werden.");
+        }
+      } finally {
+        if (!cancelled) setManualPathsBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [manualSearchOpen, open]);
+
+  const manualFilteredPaths = useMemo(() => {
+    const q = manualSearchQuery.trim().toLowerCase();
+    if (!manualAllPaths.length) return [];
+    if (!q) return manualAllPaths.slice(0, 400);
+    const out: string[] = [];
+    for (const p of manualAllPaths) {
+      const n = p.replace(/\\/g, "/").toLowerCase();
+      const base = basenamePath(p).toLowerCase();
+      if (n.includes(q) || base.includes(q)) {
+        out.push(p);
+        if (out.length >= 400) break;
+      }
+    }
+    return out;
+  }, [manualAllPaths, manualSearchQuery]);
+
+  const manualTruncated =
+    manualAllPaths.length > 0 &&
+    (manualSearchQuery.trim()
+      ? manualFilteredPaths.length >= 400
+      : manualAllPaths.length > 400);
+
+  const manualDbColumnIds = useMemo((): Mp3TableColumnId[] => {
+    if (manualMusicDbColumnIds && manualMusicDbColumnIds.length > 0) return manualMusicDbColumnIds;
+    return [...MP3_TABLE_ALL_COLUMN_IDS];
+  }, [manualMusicDbColumnIds]);
+
+  const manualDbRows = useMemo(() => {
+    if (!manualSearchOpen) return [];
+    return manualFilteredPaths.map((p, i) => {
+      const displayIdx = i + 1;
+      const cells: Record<Mp3TableColumnId, string> = getManualMusicDbRowCells
+        ? getManualMusicDbRowCells(p, displayIdx)
+        : Object.fromEntries(
+            manualDbColumnIds.map((id) => [
+              id,
+              id === "filename" ? p.replace(/\\/g, "/") : "—",
+            ])
+          ) as Record<Mp3TableColumnId, string>;
+      return { path: p, cells };
+    });
+  }, [manualSearchOpen, manualFilteredPaths, getManualMusicDbRowCells, manualDbColumnIds]);
 
   useEffect(() => {
     if (!open || !gvlApplyFromDb || multiTrack) return;
@@ -797,11 +895,20 @@ export function TagEditorModal({
                 title="Musikdatenbank durchsuchen — wie beim Transfer zu MP3: gleicher oder sehr ähnlicher Dateiname (Treffer-Dialog)."
                 onClick={() => {
                   if (musicDbSearchBusy) return;
+                  setMusicDbNoMatchHint(null);
                   setMusicDbSearchBusy(true);
                   const p = onMusicDatabaseSearch(() => formToAudioTags(form, warnToggle));
-                  void Promise.resolve(p).finally(() => {
-                    if (saveMountedRef.current) setMusicDbSearchBusy(false);
-                  });
+                  void Promise.resolve(p)
+                    .then((r) => {
+                      if (r?.noFurtherMatch) {
+                        setMusicDbNoMatchHint(
+                          "Kein passender Titel gefunden (gleicher oder sehr ähnlicher Dateiname)."
+                        );
+                      }
+                    })
+                    .finally(() => {
+                      if (saveMountedRef.current) setMusicDbSearchBusy(false);
+                    });
                 }}
               >
                 <span className="btn-tag-music-db-icon" aria-hidden>
@@ -818,6 +925,33 @@ export function TagEditorModal({
                       strokeWidth="1.5"
                     />
                     <ellipse cx="12" cy="18" rx="7" ry="3" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </span>
+              </button>
+            ) : null}
+            {onManualMusicDbAssign ? (
+              <button
+                type="button"
+                className="btn-modal btn-modal--tag-portal btn-modal--manual-music-search"
+                disabled={manualAssignBusy}
+                aria-label="Manuelle Suche in der Musikdatenbank"
+                title="Manuelle Suche: MP3 in der Musikdatenbank filtern und diesem Eintrag zuordnen."
+                onClick={() => {
+                  setMusicDbNoMatchHint(null);
+                  setManualSearchQuery("");
+                  setManualSelectedPath(null);
+                  setManualSearchOpen(true);
+                }}
+              >
+                <span className="btn-tag-manual-search-icon" aria-hidden>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.75" />
+                    <path
+                      d="M15.2 15.2 21 21"
+                      stroke="currentColor"
+                      strokeWidth="1.75"
+                      strokeLinecap="round"
+                    />
                   </svg>
                 </span>
               </button>
@@ -863,7 +997,148 @@ export function TagEditorModal({
             </button>
           </div>
         </div>
+        {!multiTrack && musicDbNoMatchHint ? (
+          <p className="tag-editor-musicdb-footer-hint" role="status">
+            {musicDbNoMatchHint}
+          </p>
+        ) : null}
       </div>
+      {manualSearchOpen && onManualMusicDbAssign ? (
+        <div
+          className="modal-backdrop modal-backdrop--tag-manual-db"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tag-manual-db-title"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setManualSearchOpen(false);
+          }}
+        >
+          <div className="modal modal--tag-manual-db" onMouseDown={(e) => e.stopPropagation()}>
+            <h2 id="tag-manual-db-title" className="modal-title">
+              MP3 aus Musikdatenbank zuordnen
+            </h2>
+            <p className="modal-lead modal-lead--muted tag-manual-db-lead">
+              Eintrag filtern, Zeile wählen, dann zuordnen — die Verknüpfung und die angezeigten Tags werden wie
+              bei einer neuen MP3-Verknüpfung gesetzt.
+            </p>
+            <label className="tag-manual-db-filter-label" htmlFor="tag-manual-db-filter">
+              Filter (Pfad oder Dateiname)
+            </label>
+            <input
+              id="tag-manual-db-filter"
+              className="modal-dup-tag-form-input tag-manual-db-filter-input"
+              type="search"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="z. B. Ordnername oder Teil des Dateinamens"
+              value={manualSearchQuery}
+              onChange={(e) => {
+                setManualSearchQuery(e.target.value);
+                setManualSelectedPath(null);
+              }}
+            />
+            {manualPathsBusy ? (
+              <p className="modal-lead modal-lead--muted" role="status">
+                Musikdatenbank wird geladen …
+              </p>
+            ) : manualPathsErr ? (
+              <p className="modal-lead tag-blankframe-api-err" role="alert">
+                {manualPathsErr}
+              </p>
+            ) : (
+              <>
+                <p className="tag-manual-db-count mono-cell" aria-live="polite">
+                  {manualFilteredPaths.length} Treffer
+                  {manualTruncated ? " (max. 400 angezeigt — Filter verfeinern)" : ""}
+                  {manualAllPaths.length > 0 && !manualSearchQuery.trim()
+                    ? ` · ${manualAllPaths.length} MP3 gesamt`
+                    : ""}
+                </p>
+                <div className="tag-manual-db-table-scroll" role="region" aria-label="Musikdatenbank-Treffer">
+                  <table className="tag-manual-db-table">
+                    <thead>
+                      <tr>
+                        {manualDbColumnIds.map((colId) => (
+                          <th key={colId} scope="col" className="tag-manual-db-th">
+                            {getMp3ColumnLabel(colId)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manualDbRows.map(({ path: p, cells }) => {
+                        const selected = manualSelectedPath === p;
+                        return (
+                          <tr
+                            key={p}
+                            className={
+                              selected
+                                ? "tag-manual-db-tr tag-manual-db-tr--selected"
+                                : "tag-manual-db-tr"
+                            }
+                            onClick={() => setManualSelectedPath(p)}
+                            onDoubleClick={() => {
+                              setManualSelectedPath(p);
+                              setManualAssignBusy(true);
+                              const done = onManualMusicDbAssign(p);
+                              void Promise.resolve(done).finally(() => {
+                                if (saveMountedRef.current) {
+                                  setManualAssignBusy(false);
+                                  setManualSearchOpen(false);
+                                }
+                              });
+                            }}
+                          >
+                            {manualDbColumnIds.map((colId) => {
+                              const text = cells[colId] ?? "—";
+                              return (
+                                <td
+                                  key={colId}
+                                  className={
+                                    colId === "filename"
+                                      ? "tag-manual-db-td mono-cell"
+                                      : "tag-manual-db-td"
+                                  }
+                                  title={text}
+                                >
+                                  {text}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            <div className="modal-actions">
+              <button type="button" className="btn-modal" onClick={() => setManualSearchOpen(false)}>
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className="btn-modal primary"
+                disabled={!manualSelectedPath || manualAssignBusy || manualPathsBusy}
+                onClick={() => {
+                  if (!manualSelectedPath) return;
+                  setManualAssignBusy(true);
+                  const done = onManualMusicDbAssign(manualSelectedPath);
+                  void Promise.resolve(done).finally(() => {
+                    if (saveMountedRef.current) {
+                      setManualAssignBusy(false);
+                      setManualSearchOpen(false);
+                    }
+                  });
+                }}
+              >
+                {manualAssignBusy ? "Zuordnen …" : "Diesen Titel zuordnen"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {filenameCtx ? (
         <>
           <div
