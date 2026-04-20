@@ -149,6 +149,11 @@ type Props = {
   /** Nur Administratoren: GVL-Datenbank unter „Verwaltung“. */
   showGvlDatabaseButton?: boolean;
   onOpenGvlDatabase: () => void;
+  /**
+   * Server-Musikdatenbank: gleiche Trefferlogik wie „Transfer to MP3“ (exakter/ähnlicher Dateiname).
+   * Erhält aktuelle Tag-Felder aus dem Formular.
+   */
+  onMusicDatabaseSearch?: (getCurrentTags: () => AudioTags) => void | Promise<void>;
   onClose: () => void;
   onSave: OnSaveTag;
 };
@@ -163,6 +168,7 @@ export function TagEditorModal({
   gvlLabelDb = null,
   showGvlDatabaseButton = true,
   onOpenGvlDatabase,
+  onMusicDatabaseSearch,
   onClose,
   onSave,
 }: Props) {
@@ -184,6 +190,7 @@ export function TagEditorModal({
   const [wcpmApiBusy, setWcpmApiBusy] = useState(false);
   const [wcpmApiErr, setWcpmApiErr] = useState<string | null>(null);
   const [labelcodeLookupHint, setLabelcodeLookupHint] = useState<string | null>(null);
+  const [musicDbSearchBusy, setMusicDbSearchBusy] = useState(false);
 
   const applyFilenameSelectionToField = useCallback(
     (field: (typeof FILENAME_TARGET_FIELDS)[number]["key"], text: string) => {
@@ -780,6 +787,40 @@ export function TagEditorModal({
               <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
                 {wcpmApiErr}
               </p>
+            ) : null}
+            {onMusicDatabaseSearch ? (
+              <button
+                type="button"
+                className="btn-modal btn-modal--tag-portal btn-modal--music-db-search"
+                disabled={musicDbSearchBusy}
+                aria-label="Suche in Datenbank"
+                title="Musikdatenbank durchsuchen — wie beim Transfer zu MP3: gleicher oder sehr ähnlicher Dateiname (Treffer-Dialog)."
+                onClick={() => {
+                  if (musicDbSearchBusy) return;
+                  setMusicDbSearchBusy(true);
+                  const p = onMusicDatabaseSearch(() => formToAudioTags(form, warnToggle));
+                  void Promise.resolve(p).finally(() => {
+                    if (saveMountedRef.current) setMusicDbSearchBusy(false);
+                  });
+                }}
+              >
+                <span className="btn-tag-music-db-icon" aria-hidden>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <ellipse cx="12" cy="6" rx="7" ry="3" stroke="currentColor" strokeWidth="1.5" />
+                    <path
+                      d="M5 6v4c0 1.66 3.13 3 7 3s7-1.34 7-3V6"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    />
+                    <path
+                      d="M5 10v4c0 1.66 3.13 3 7 3s7-1.34 7-3v-4"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    />
+                    <ellipse cx="12" cy="18" rx="7" ry="3" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </span>
+              </button>
             ) : null}
             {showGvlDatabaseButton ? (
               <button

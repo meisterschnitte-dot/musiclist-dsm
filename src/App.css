@@ -4416,6 +4416,21 @@ body {
   filter: brightness(0) invert(1);
 }
 
+.btn-modal--music-db-search .btn-tag-music-db-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+
+.btn-modal--music-db-search .btn-tag-music-db-icon svg {
+  display: block;
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
 .tags-ctx-menu-item--danger {
   color: var(--app-error);
 }

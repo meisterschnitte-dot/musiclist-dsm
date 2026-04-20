@@ -66,6 +66,13 @@ export type DuplicatePrompt = {
   proposedTags: AudioTags;
   /** ID3 aus den Kandidaten-Dateien auf dem Server / Speicherort — nur Musikdatenbank, keine App-Overlays. */
   candidateTagsByPath: Record<string, AudioTags>;
+  /**
+   * Tag-Editor „Suche in Datenbank“: welche Zeile bzw. Datei die „Neu“-Tags erhält.
+   * Beim Export immer unset (nur `playlistIndex`).
+   */
+  tagEditorTarget?:
+    | { kind: "playlist"; index: number }
+    | { kind: "file"; fileName: string };
 };
 
 export type DuplicateChoice =
@@ -107,8 +114,9 @@ async function listAllMp3RelativePathsUnderRoot(
 /**
  * Alle passenden bestehenden MP3s (Musikdatenbank vor diesem Lauf): zuerst exakt gleicher Basisname,
  * dann ähnlicher Titel — ohne doppelte Pfade.
+ * Gleiche Logik wie beim Transfer zu MP3 (`exportFakeTracksToSharedStorage`).
  */
-function findConflictingFiles(
+export function findDuplicateCandidatesInMusicDbPaths(
   proposedStem: string,
   proposedFileName: string,
   existingRelativePaths: string[]
@@ -132,6 +140,17 @@ function findConflictingFiles(
     }
   }
   return out;
+}
+
+/** ID3 der Kandidaten-Pfade (Server-Musikdatenbank), für Duplikat-Dialog. */
+export async function loadCandidateTagsFromSharedMusicDb(
+  paths: string[]
+): Promise<Record<string, AudioTags>> {
+  const candidateTagsByPath: Record<string, AudioTags> = {};
+  for (const p of paths) {
+    candidateTagsByPath[p] = await readTagsFromSharedMp3Path(p);
+  }
+  return candidateTagsByPath;
 }
 
 async function readTagsFromSharedMp3Path(relativePath: string): Promise<AudioTags> {
@@ -315,7 +334,7 @@ export async function exportFakeTracksToTracksFolder(
       continue;
     }
 
-    const conflicts = findConflictingFiles(stem, proposedFileName, existingMp3Paths);
+    const conflicts = findDuplicateCandidatesInMusicDbPaths(stem, proposedFileName, existingMp3Paths);
 
     let storedRelativePath: string;
 
@@ -408,6 +427,21 @@ export type SharedFakeMp3Sink = {
   writeMp3Blob: (relativePath: string, blob: Blob) => Promise<void>;
 };
 
+/** „Überschreibe alten Datensatz“ — wie im Transfer, nur Schreiben auf den Server. */
+export async function applyDuplicateOverwriteToSharedStorage(
+  choice: Extract<DuplicateChoice, { action: "overwrite" }>,
+  sink: SharedFakeMp3Sink
+): Promise<void> {
+  const propMerged = mergeWarnungForDisplay(choice.proposedTagsEdited);
+  let blob: Blob = createFakeMp3Blob();
+  if (hasAnyAudioTagValue(propMerged)) {
+    blob = await embedId3InMp3Blob(blob, propMerged);
+  }
+  for (const rel of choice.relativePaths) {
+    await sink.writeMp3Blob(rel, blob);
+  }
+}
+
 async function rewriteSharedMp3Id3(
   relativePath: string,
   tags: AudioTags,
@@ -496,7 +530,7 @@ export async function exportFakeTracksToSharedStorage(
       continue;
     }
 
-    const conflicts = findConflictingFiles(stem, proposedFileName, existingMp3Paths);
+    const conflicts = findDuplicateCandidatesInMusicDbPaths(stem, proposedFileName, existingMp3Paths);
 
     let storedRelativePath: string;
 

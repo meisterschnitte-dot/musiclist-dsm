@@ -133,14 +133,18 @@ import { loadTheme, saveTheme, type AppTheme } from "./storage/themeStorage";
 import { writeAudioTagsToSharedMp3 } from "./audio/writeAudioTagsToSharedMp3";
 import { deleteMp3FilesFromSharedStorage } from "./tracks/deleteMp3FromSharedStorage";
 import {
+  applyDuplicateOverwriteToSharedStorage,
   deriveExportProjectFolderName,
   exportFakeTracksToSharedStorage,
+  findDuplicateCandidatesInMusicDbPaths,
+  loadCandidateTagsFromSharedMusicDb,
   type DuplicateChoice,
   type DuplicatePrompt,
 } from "./tracks/exportTracks";
 import {
   basenamePath,
   resolveMusicDbPathForBasename,
+  sanitizeFilenameStem,
   stripExtension,
 } from "./tracks/sanitizeFilename";
 import { getMusicDbPathsMissingOnServer } from "./tracks/missingMusicDbFiles";
@@ -2020,8 +2024,20 @@ export default function App() {
         const dm = dupModal;
         setTagStore((prev) => {
           const next = { ...prev };
-          const row = playlist?.[dm.playlistIndex];
-          if (row) {
+          const rowFromExport =
+            dm.tagEditorTarget == null ? playlist?.[dm.playlistIndex] : undefined;
+          const rowFromTagEditorPlaylist =
+            dm.tagEditorTarget?.kind === "playlist" ? playlist?.[dm.tagEditorTarget.index] : undefined;
+          const row = rowFromTagEditorPlaylist ?? rowFromExport;
+          const fileOnlyTarget =
+            dm.tagEditorTarget?.kind === "file" ? dm.tagEditorTarget.fileName : null;
+
+          if (fileOnlyTarget) {
+            const base = defaultTagsFromPlaylistTitle(fileOnlyTarget);
+            const proposedBaseline = mergeWarnungForDisplay({ ...dm.proposedTags });
+            const fullMerged = dupModalTagsOverBaseline(dupTagDraftProposed, proposedBaseline);
+            next[fileTagKey(fileOnlyTarget)] = overlayFromForm(base, fullMerged);
+          } else if (row) {
             const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
             const proposedBaseline = mergeWarnungForDisplay({ ...dm.proposedTags });
             const fullMerged = dupModalTagsOverBaseline(dupTagDraftProposed, proposedBaseline);
@@ -2042,6 +2058,19 @@ export default function App() {
           persistTagStore(next);
           return next;
         });
+
+        if (
+          choice.action === "identical" &&
+          dm.tagEditorTarget?.kind === "playlist" &&
+          playlist
+        ) {
+          const idx = dm.tagEditorTarget.index;
+          const ex = choice.existingFileName;
+          setPlaylist((prev) => {
+            if (!prev || idx < 0 || idx >= prev.length) return prev;
+            return prev.map((r, i) => (i === idx ? { ...r, linkedTrackFileName: ex } : r));
+          });
+        }
       }
       if (dupApplyAllCheckedRef.current) {
         dupApplyAllRef.current = choice.action === "identical" ? "identical" : "different";
@@ -2052,6 +2081,117 @@ export default function App() {
       });
     },
     [dupModal, playlist, dupTagDraftProposed, dupTagDraftCandidates, persistTagStore]
+  );
+
+  /** Wie „Transfer to MP3“: gleiche/ähnliche Dateinamen in der Server-Musikdatenbank ermitteln. */
+  const onTagEditorMusicDbSearch = useCallback(
+    async (getCurrentTags: () => AudioTags) => {
+      if (!sessionUserId) {
+        setError("Bitte anmelden, um die Musikdatenbank durchsuchen zu können.");
+        return;
+      }
+      const tm = tagModal;
+      if (!tm || tm.kind === "playlistMulti" || tm.kind === "fileMulti") return;
+
+      dupApplyAllRef.current = null;
+      setError(null);
+
+      try {
+        let raw: string;
+        let playlistIndex: number;
+        let playlistTitle: string;
+        let tagEditorTarget: DuplicatePrompt["tagEditorTarget"];
+
+        if (tm.kind === "playlist") {
+          if (!playlist) return;
+          const row = playlist[tm.index];
+          raw = row.linkedTrackFileName ?? row.title;
+          playlistIndex = tm.index;
+          playlistTitle = row.title;
+          tagEditorTarget = { kind: "playlist", index: tm.index };
+        } else {
+          raw = tm.fileName;
+          playlistIndex = -1;
+          playlistTitle = basenamePath(tm.fileName);
+          tagEditorTarget = { kind: "file", fileName: tm.fileName };
+        }
+
+        const stem = sanitizeFilenameStem(stripExtension(raw));
+        const proposedFileName = `${stem}.mp3`;
+        const { paths } = await apiSharedMusicDbFetch();
+        let conflicts = findDuplicateCandidatesInMusicDbPaths(stem, proposedFileName, paths);
+
+        const selfPath =
+          tm.kind === "playlist"
+            ? playlist?.[tm.index]?.linkedTrackFileName?.trim() || null
+            : tm.fileName;
+        if (selfPath) {
+          const selfNorm = selfPath.replace(/\\/g, "/").toLowerCase();
+          conflicts = conflicts.filter(
+            (c) => c.existingFileName.replace(/\\/g, "/").toLowerCase() !== selfNorm
+          );
+        }
+
+        if (conflicts.length === 0) {
+          setError(
+            "Kein weiterer passender Titel in der Musikdatenbank (gleicher oder sehr ähnlicher Dateiname)."
+          );
+          return;
+        }
+
+        const candidateTagsByPath = await loadCandidateTagsFromSharedMusicDb(
+          conflicts.map((c) => c.existingFileName)
+        );
+        const proposedTags = mergeWarnungForDisplay(getCurrentTags());
+
+        const choice = await askDuplicate({
+          playlistTitle,
+          proposedFileName,
+          playlistIndex,
+          candidates: conflicts,
+          proposedTags,
+          candidateTagsByPath,
+          tagEditorTarget,
+        });
+
+        if (choice.action === "identical") {
+          try {
+            await writeAudioTagsToSharedMp3(
+              apiSharedTracksReadBinary,
+              apiSharedTracksWriteBinary,
+              choice.existingFileName,
+              mergeWarnungForDisplay(choice.existingFileTagsEdited)
+            );
+            try {
+              const entry = await apiSharedMusicDbTouchTagEdited(choice.existingFileName);
+              setMusicDbMetadata((prev) => ({ ...prev, [choice.existingFileName]: entry }));
+            } catch {
+              /* optional */
+            }
+          } catch (e) {
+            setError(
+              e instanceof Error
+                ? e.message
+                : "MP3 auf dem Server konnte nicht mit den gewählten Tags beschrieben werden."
+            );
+          }
+        } else if (choice.action === "overwrite") {
+          const sink = createSharedFakeMp3Sink();
+          await applyDuplicateOverwriteToSharedStorage(choice, sink);
+          for (const rel of choice.relativePaths) {
+            try {
+              const entry = await apiSharedMusicDbTouchTagEdited(rel);
+              setMusicDbMetadata((prev) => ({ ...prev, [rel]: entry }));
+            } catch {
+              /* optional */
+            }
+          }
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Musikdatenbank-Suche fehlgeschlagen.");
+      }
+    },
+    [sessionUserId, tagModal, playlist, askDuplicate]
   );
 
   const openPlaylistTags = useCallback(
@@ -5468,6 +5608,7 @@ export default function App() {
           }
           showGvlDatabaseButton={isAdmin}
           onOpenGvlDatabase={onOpenSystemSettings}
+          onMusicDatabaseSearch={onTagEditorMusicDbSearch}
           onClose={closeTagModal}
           onSave={saveTagModal}
         />
