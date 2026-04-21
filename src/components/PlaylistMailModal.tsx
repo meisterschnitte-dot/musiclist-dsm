@@ -18,7 +18,7 @@ type Props = {
   attachmentBase64: string;
   attachmentFileName: string;
   defaultSubject: string;
-  /** HTML (z. B. &lt;strong&gt;, &lt;br&gt;) — wird mit Plaintext-Alternative versendet. */
+  /** Standardtext der Nachricht (reiner Text; optional später HTML möglich). */
   defaultBody: string;
   /** Geöffnete Bibliotheksdatei — wird dem Kunden nach Mail-Versand für den Browser zugewiesen. */
   mailAssignment: {
@@ -62,19 +62,7 @@ export function PlaylistMailModal({
     void fetchCustomersList()
       .then((rows) => {
         setCustomers(rows);
-        if (cid) {
-          const c = rows.find((x) => x.id === cid);
-          if (c) {
-            const all = new Set<string>();
-            for (const e of c.emails) all.add(e);
-            for (const g of c.groups) for (const em of g.emails) all.add(em);
-            setSelected(all);
-          } else {
-            setSelected(new Set());
-          }
-        } else {
-          setSelected(new Set());
-        }
+        setSelected(new Set());
       })
       .catch((e) => setErr(e instanceof Error ? e.message : "Kunden konnten nicht geladen werden."))
       .finally(() => setBusy(false));
@@ -286,7 +274,8 @@ export function PlaylistMailModal({
             <label className="tag-field playlist-mail-field">
               <span>Text</span>
               <span className="playlist-mail-html-hint">
-                HTML möglich (&lt;br&gt;, &lt;strong&gt;…&lt;/strong&gt;); der Playlistname ist in der Vorlage fett.
+                Reiner Text (Zeilenumbrüche mit Enter). Optional können Sie HTML einfügen — wird dann als
+                HTML-Mail mit Text-Fallback versendet.
               </span>
               <textarea
                 className="playlist-mail-body"

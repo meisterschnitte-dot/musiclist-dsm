@@ -3078,14 +3078,6 @@ body {
   justify-content: flex-end;
 }
 
-.customer-view-hint {
-  font-size: 0.78rem;
-  color: var(--app-text-muted);
-  max-width: 22rem;
-  text-align: right;
-  line-height: 1.35;
-}
-
 .table-th-customer {
   font-size: 0.78rem;
   letter-spacing: 0.03em;

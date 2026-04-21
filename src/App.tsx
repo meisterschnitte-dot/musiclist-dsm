@@ -240,14 +240,6 @@ const XLS_EXPORT_TOOLTIP =
 const PLAYLIST_MAIL_TOOLTIP =
   "Dialog zum Versand der GEMA-Übersicht als Excel-Anhang per E-Mail an Kundenadressen (nur Administratoren).";
 
-function escapeHtmlForMail(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 const MP3_COL_DRAG_MIME = "application/x-mp3-col-id";
 const EDL_COL_DRAG_MIME = "application/x-edl-col-id";
 
@@ -3893,9 +3885,12 @@ export default function App() {
         attachmentBase64: arrayBufferToBase64(buffer),
         attachmentFileName: outName,
         defaultSubject: `GEMA ${stem}`,
-        defaultBody: `Hallo zusammen,<br><br>anbei erhaltet ihr die GEMA-Übersicht zum Film <strong>${escapeHtmlForMail(
-          stem
-        )}</strong> als Excel-Datei. Mit den von euch genutzten Tracks ist alles in Ordnung. Wenn ihr euch mit euren Kontodaten hier einloggt: <a href="https://musiclist.dsm.team/">https://musiclist.dsm.team/</a> dann könnt ihr die Tabellen komfortabler betrachten.<br><br>Viele Grüße<br>Oliver`,
+        defaultBody: `Hallo zusammen,
+
+anbei erhaltet ihr die GEMA-Übersicht zum Film ${stem} als Excel-Datei. Mit den von euch genutzten Tracks ist alles in Ordnung. Wenn ihr euch mit euren Kontodaten hier einloggt: https://musiclist.dsm.team/ dann könnt ihr die Tabellen komfortabler betrachten.
+
+Viele Grüße
+Oliver`,
         mailAssignment,
         initialCustomerId,
         customerMissingHint,
@@ -4778,12 +4773,15 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="panel-head-edl-actions panel-head-edl-actions--customer-hint">
-                        <span
-                          className="customer-view-hint"
-                          title="Filter, Sortierung, Spaltenbreite und Reihenfolge; Klick auf Zelle kopiert den Inhalt"
+                        <button
+                          type="button"
+                          className="btn-transfer-mp3"
+                          title={XLS_EXPORT_TOOLTIP}
+                          disabled={!playlist?.length || exportBusy || !fileName}
+                          onClick={() => void requestPlaylistXlsExport()}
                         >
-                          Filter · Sortierung · Spalten · Klick kopiert Zelle
-                        </span>
+                          XLS-Export
+                        </button>
                         {playlist && fileName && edlFiltersActiveForPlaylistView && (
                           <button
                             type="button"
