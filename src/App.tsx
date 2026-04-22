@@ -330,6 +330,12 @@ function getEdlCellPlainText(
   return String(cell);
 }
 
+/** Kundenansicht: In die Zwischenablage nur Ziffern des Labelcodes (z. B. „LC 56473“ → 56473). */
+function customerClipboardTextForEdlCol(colId: EdlTableColumnId, plain: string): string {
+  if (colId !== "labelcode") return plain;
+  return plain.replace(/\D/g, "");
+}
+
 /** Kundenansicht: Mehrfachauswahl (Strg/Cmd+Klick) — Schlüssel ohne Kollision mit Spalten-IDs. */
 const CUSTOMER_CELL_KEY_SEP = "\u0001";
 
@@ -381,7 +387,14 @@ function buildCustomerMultiCellClipboardText(
     const row = playlist[rowIndex]!;
     const plMerged = playlistMergedTags[rowIndex] ?? {};
     lines.push(
-      cols.map((colId) => getEdlCellPlainText(colId, row, rowIndex, plMerged)).join("\t")
+      cols
+        .map((colId) =>
+          customerClipboardTextForEdlCol(
+            colId,
+            getEdlCellPlainText(colId, row, rowIndex, plMerged)
+          )
+        )
+        .join("\t")
     );
   }
   return lines.join("\n");
@@ -4168,7 +4181,10 @@ Oliver`,
       const row = playlist[playlistIndex];
       if (!row) return;
       const plMerged = playlistMergedTags[playlistIndex] ?? {};
-      const text = getEdlCellPlainText(colId, row, playlistIndex, plMerged);
+      const text = customerClipboardTextForEdlCol(
+        colId,
+        getEdlCellPlainText(colId, row, playlistIndex, plMerged)
+      );
       const key = customerCellKey(playlistIndex, colId);
 
       if (e.ctrlKey || e.metaKey) {
@@ -4977,7 +4993,9 @@ Oliver`,
                                           }
                                           title={
                                             playlistAsCustomerExport
-                                              ? "Klick: Zelle kopieren · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben"
+                                              ? (colId === "labelcode"
+                                                  ? "Klick: Labelcode-Ziffern in die Zwischenablage (ohne „LC “) · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben"
+                                                  : "Klick: Zelle kopieren · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben")
                                               : undefined
                                           }
                                         >
@@ -5008,7 +5026,7 @@ Oliver`,
                 </div>
               </div>
 
-              {customerModeActive && !isCustomerUser ? null : edlAblageCollapsed ? (
+              {edlAblageCollapsed ? (
                 <button
                   type="button"
                   className="edl-ablage-expand-tab"
