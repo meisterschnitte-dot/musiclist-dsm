@@ -949,7 +949,7 @@ export function TagEditorModal({
               type="button"
               className="btn-modal"
               disabled={wcpmApiBusy}
-              title="Zeile aus der hochgeladenen WCPM-Excel (Verwaltung → Musikverlage) per Dateiname (Spalte FILENAME; .wav/.mp3 wird ignoriert). Labelcode mit LC …; GVL-Ergänzung wenn vorhanden."
+              title="Zeile aus der hochgeladenen WCPM-Excel (Verwaltung → Musikverlage) per Dateiname (Spalte FILENAME; .wav/.mp3 wird ignoriert). Kennung z. B. CAR439_014 oder CAR439 014 (Leerzeichen statt _). Labelcode mit LC …; GVL-Ergänzung wenn vorhanden."
               onClick={() => void onWcpmLookupClick()}
             >
               {wcpmApiBusy ? "WCPM …" : "WCPM"}

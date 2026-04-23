@@ -27,6 +27,28 @@ export function hasAnyAudioTagValue(tags: AudioTags): boolean {
 }
 
 /**
+ * Für die Playlist-Timeline: alle sieben Pflichtfelder gesetzt (Songtitel, Interpret, Album,
+ * Komponist, Labelcode, Label, Hersteller) — ohne Jahr, ISRC, Rechterückruf.
+ */
+export const TIMELINE_COMPLETE_TAG_KEYS: (keyof AudioTags)[] = [
+  "songTitle",
+  "artist",
+  "album",
+  "composer",
+  "labelcode",
+  "label",
+  "hersteller",
+];
+
+export function isTimelineTagsComplete(merged: AudioTags): boolean {
+  for (const k of TIMELINE_COMPLETE_TAG_KEYS) {
+    const v = merged[k];
+    if (typeof v !== "string" || !v.trim()) return false;
+  }
+  return true;
+}
+
+/**
  * Rechterückruf-Feld: Einträge durch Semikolon getrennt (z. B. R6;R9;R12;R13).
  * Liegt ein Eintrag exakt „R3“ vor (Groß/Klein), gilt die Warnung — nicht „R13“ oder „R30“.
  */

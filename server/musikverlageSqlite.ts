@@ -6,6 +6,7 @@ import type { MusikverlagId } from "../src/musikverlage/musikverlageCatalog";
 import {
   parseWcpmHeaderRow,
   wcpmFilenameStem,
+  wcpmFilenameStemAlnumKey,
   wcpmFilenameStemMatchKey,
   wcpmRowToTagPayload,
   type WcpmTagPayload,
@@ -235,25 +236,48 @@ export function lookupWcpmPayloadFromDb(fileName: string): WcpmTagPayload | null
   if (!musikverlagSqliteExists(id)) return null;
   const stem = wcpmFilenameStem(fileName);
   const matchKey = wcpmFilenameStemMatchKey(fileName);
+  const alnumKey = wcpmFilenameStemAlnumKey(fileName);
   if (!stem) return null;
   const db = new Database(sqlitePathForMusikverlag(id), { readonly: true });
   try {
     const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
     if (fmt?.v !== "wcpm_v1") return null;
+    /** Gleiche Logik wie im Client; reines SQL REPLACE() deckt z. B. `CAR439 014` vs. `car439_014` unzuverlässig ab. */
+    db.function("wcpm_stem_match_key", (x: string | null) => {
+      if (x == null) return null;
+      return wcpmFilenameStemMatchKey(String(x));
+    });
+    db.function("wcpm_stem_alnum_key", (x: string | null) => {
+      if (x == null) return null;
+      return wcpmFilenameStemAlnumKey(String(x));
+    });
     const rowExact = db
       .prepare("SELECT payload_json FROM wcpm_tracks WHERE filename_stem = ?")
       .get(stem) as { payload_json: string } | undefined;
     if (rowExact?.payload_json) {
       return JSON.parse(rowExact.payload_json) as WcpmTagPayload;
     }
-    if (!matchKey) return null;
-    const rowFuzzy = db
-      .prepare(
-        "SELECT payload_json FROM wcpm_tracks WHERE REPLACE(REPLACE(REPLACE(filename_stem, '_', ''), ' ', ''), '-', '') = ? LIMIT 1"
-      )
-      .get(matchKey) as { payload_json: string } | undefined;
-    if (!rowFuzzy?.payload_json) return null;
-    return JSON.parse(rowFuzzy.payload_json) as WcpmTagPayload;
+    if (matchKey) {
+      const rowFuzzy = db
+        .prepare(
+          "SELECT payload_json FROM wcpm_tracks WHERE wcpm_stem_match_key(filename_stem) = ? LIMIT 1"
+        )
+        .get(matchKey) as { payload_json: string } | undefined;
+      if (rowFuzzy?.payload_json) {
+        return JSON.parse(rowFuzzy.payload_json) as WcpmTagPayload;
+      }
+    }
+    if (alnumKey.length >= 8) {
+      const rowAlnum = db
+        .prepare(
+          "SELECT payload_json FROM wcpm_tracks WHERE wcpm_stem_alnum_key(filename_stem) = ? LIMIT 1"
+        )
+        .get(alnumKey) as { payload_json: string } | undefined;
+      if (rowAlnum?.payload_json) {
+        return JSON.parse(rowAlnum.payload_json) as WcpmTagPayload;
+      }
+    }
+    return null;
   } finally {
     db.close();
   }

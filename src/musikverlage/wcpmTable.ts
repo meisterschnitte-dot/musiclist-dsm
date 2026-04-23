@@ -27,12 +27,33 @@ export function wcpmFilenameStem(pathOrFileName: string): string {
 /**
  * Fehlertoleranter Vergleichsschlüssel für WCPM-Dateinamen.
  * Ignoriert Trennzeichen wie Leerzeichen/Unterstrich/Bindestrich:
- * `AA273_01_Pure Energy` == `AA273 01 Pure Energy`.
+ * `AA273_01_Pure Energy` == `AA273 01 Pure Energy`, ebenso `CAR439_014` == `CAR439 014` am Stück.
+ * (NFKC: Excel/Zwischenablage; einheitliche Bindestrich-Varianten.)
  */
 export function wcpmFilenameStemMatchKey(pathOrFileName: string): string {
   const stem = wcpmFilenameStem(pathOrFileName);
   if (!stem) return "";
-  return stem.replace(/[\s_-]+/g, "");
+  let s = stem.normalize("NFKC");
+  s = s.replace(
+    /[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]/g,
+    "-"
+  );
+  s = s.replace(/[\s_-]+/g, "");
+  return s;
+}
+
+/**
+ * Notfall-Abgleich, wenn Trennzeichen außerhalb des üblichen Musters liegen
+ * (z. B. Geviertstrich/Unicode); nur a–z/0–9, alle Kleinbuchstaben, keine Leerzeichen.
+ * Zwei Kennungen wie `CAR439_014` und `CAR439 014` führen auf denselben Schlüssel.
+ */
+export function wcpmFilenameStemAlnumKey(pathOrFileName: string): string {
+  const stem = wcpmFilenameStem(pathOrFileName);
+  if (!stem) return "";
+  return stem
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 export type WcpmHeaderMap = {
@@ -156,6 +177,8 @@ export function findWcpmRowByStem(
 ): { rowIndex: number; row: unknown[] } | null {
   const want = wcpmFilenameStem(fileNameOrPath);
   const wantMatchKey = wcpmFilenameStemMatchKey(fileNameOrPath);
+  const wantAlnum = wcpmFilenameStemAlnumKey(fileNameOrPath);
+  const alnumActive = wantAlnum.length >= 8;
   if (!want) return null;
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -167,6 +190,9 @@ export function findWcpmRowByStem(
       return { rowIndex: r, row };
     }
     if (wantMatchKey && wcpmFilenameStemMatchKey(cell) === wantMatchKey) {
+      return { rowIndex: r, row };
+    }
+    if (alnumActive && wcpmFilenameStemAlnumKey(cell) === wantAlnum) {
       return { rowIndex: r, row };
     }
   }

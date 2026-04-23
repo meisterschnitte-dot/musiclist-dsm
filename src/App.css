@@ -1977,6 +1977,13 @@ body {
   pointer-events: none;
 }
 
+/** Über dem Range-Scrub (z-index 12), damit Klicks den Track in der EDL fokussieren. */
+.playlist-timeline__clip--selectable {
+  z-index: 13;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 .playlist-timeline__clip-label {
   padding: 0 0.25rem;
   font-size: 0.58rem;
@@ -1985,6 +1992,16 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   width: 100%;
+}
+
+/** Timeline: leichtes Rot, wenn mindestens eines der sieben Pflicht-Tag-Felder fehlt. */
+.playlist-timeline__clip--incomplete-tags {
+  border-color: rgba(200, 120, 120, 0.85);
+  background: linear-gradient(180deg, rgba(150, 70, 70, 0.5) 0%, rgba(110, 50, 50, 0.38) 100%);
+}
+
+.playlist-timeline__clip--incomplete-tags .playlist-timeline__clip-label {
+  color: #f0c8c8;
 }
 
 .playlist-timeline__empty {
@@ -5430,6 +5447,15 @@ html[data-theme="light"] .playlist-timeline__lane-label,
 html[data-theme="light"] .playlist-timeline__clip-label,
 html[data-theme="light"] .playlist-timeline__empty {
   color: #000000;
+}
+
+html[data-theme="light"] .playlist-timeline__clip--incomplete-tags {
+  border-color: #e09090;
+  background: linear-gradient(180deg, #fde0e0 0%, #f5c8c8 100%);
+}
+
+html[data-theme="light"] .playlist-timeline__clip--incomplete-tags .playlist-timeline__clip-label {
+  color: #3d1010;
 }
 
 /** Helles Theme: EDL- & Playlist — Aktionsbuttons in der Kopfzeile (Transfer, Filter, Spalten) */

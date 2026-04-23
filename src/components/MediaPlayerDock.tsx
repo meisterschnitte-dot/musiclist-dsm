@@ -92,11 +92,17 @@ function findPlaylistRowForFileName(
 export function MediaPlayerDock({
   playlist = null,
   playlistDocumentTitle = null,
+  tagIncompleteByEntryId = null,
+  onTimelineClipSelectEntryId = null,
   seekToProgramFramesRequest = null,
 }: {
   playlist?: PlaylistEntry[] | null;
   /** Anzeige über der Timeline (z. B. geladene .list / EDL-Name). */
   playlistDocumentTitle?: string | null;
+  /** Pro Zeilen-ID: unvollständige Tags (nur Markierung in der Timeline, nicht in der EDL). */
+  tagIncompleteByEntryId?: Readonly<Record<string, boolean>> | null;
+  /** Klick auf einen Clip: EDL-Zeile fokussieren und Programm-TC setzen. */
+  onTimelineClipSelectEntryId?: ((entryId: string) => void) | null;
   /** Bei Klick auf einen Playlist-Track: Programm-TC springen (`requestId` bei jedem Klick erhöhen). */
   seekToProgramFramesRequest?: { programFrames: number; requestId: number } | null;
 }) {
@@ -508,6 +514,8 @@ export function MediaPlayerDock({
           <PlaylistTimeline
             playlist={playlist}
             playlistDocumentTitle={playlistDocumentTitle}
+            tagIncompleteByEntryId={tagIncompleteByEntryId}
+            onClipSelectEntryId={onTimelineClipSelectEntryId}
             videoDurationSeconds={mediaDurationSec}
             originFrames={originFrames}
             onOriginFramesChange={setOriginFrames}

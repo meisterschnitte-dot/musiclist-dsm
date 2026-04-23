@@ -144,6 +144,10 @@ type Props = {
   playlist: PlaylistEntry[] | null;
   /** In der Kopfzeile rechts: Name der geladenen Playlist / EDL-Datei. */
   playlistDocumentTitle?: string | null;
+  /** Pro Playlist-Zeilen-ID: true, wenn Tags unvollständig (nur für Timeline-Markierung). */
+  tagIncompleteByEntryId?: Readonly<Record<string, boolean>> | null;
+  /** Klick auf Clip: z. B. EDL-Zeile fokussieren (Eintrag-ID = `PlaylistEntry.id`). */
+  onClipSelectEntryId?: ((entryId: string) => void) | null;
   /** Videolänge in Sekunden (für End-TC = Start-TC + Dauer bei 25 fps). */
   videoDurationSeconds?: number | null;
   fps?: number;
@@ -159,6 +163,8 @@ type Props = {
 export function PlaylistTimeline({
   playlist,
   playlistDocumentTitle = null,
+  tagIncompleteByEntryId = null,
+  onClipSelectEntryId = null,
   videoDurationSeconds = null,
   fps = DEFAULT_FPS,
   originFrames,
@@ -261,18 +267,21 @@ export function PlaylistTimeline({
     const spanVal = Math.max(1, maxExtent);
 
     const assigned = assignLanesByOverlap(rawSegments);
+    const incMap = tagIncompleteByEntryId ?? undefined;
     const clipItems: Array<{
       key: string;
       lane: 0 | 1 | 2;
       leftPct: number;
       widthPct: number;
       label: string;
+      tagIncomplete: boolean;
     }> = assigned.map((s) => ({
       key: s.key,
       lane: s.lane,
       leftPct: (s.segStart / spanVal) * 100,
       widthPct: ((s.segEnd - s.segStart) / spanVal) * 100,
       label: s.label,
+      tagIncomplete: incMap ? incMap[s.key] === true : false,
     }));
 
     const tickCount = Math.min(12, Math.max(4, Math.ceil(spanVal / (fps * 60))));
@@ -297,7 +306,7 @@ export function PlaylistTimeline({
       playheadLeftPct: playheadLeftPctVal,
       playheadOffsetFromOrigin: phOff,
     };
-  }, [playlist, fps, originFrames, effectivePlayheadFrames]);
+  }, [playlist, tagIncompleteByEntryId, fps, originFrames, effectivePlayheadFrames]);
 
   const playheadTcDisplay = useMemo(() => {
     return framesToTimecode(effectivePlayheadFrames, fps);
@@ -365,6 +374,7 @@ export function PlaylistTimeline({
     const el = e.target as HTMLElement;
     if (el.closest("input, textarea, button, select, a")) return;
     if (el.closest('[role="slider"]')) return;
+    if (el.closest(".playlist-timeline__clip--selectable")) return;
     e.currentTarget.focus();
   }, []);
 
@@ -755,9 +765,43 @@ export function PlaylistTimeline({
                     .map((c) => (
                       <div
                         key={c.key}
-                        className="playlist-timeline__clip"
+                        role={onClipSelectEntryId ? "button" : undefined}
+                        tabIndex={onClipSelectEntryId ? 0 : undefined}
+                        aria-label={
+                          onClipSelectEntryId
+                            ? `${c.label}. Eintrag in der Liste fokussieren.`
+                            : undefined
+                        }
+                        className={
+                          "playlist-timeline__clip" +
+                          (c.tagIncomplete ? " playlist-timeline__clip--incomplete-tags" : "") +
+                          (onClipSelectEntryId ? " playlist-timeline__clip--selectable" : "")
+                        }
                         style={{ left: `${c.leftPct}%`, width: `${c.widthPct}%` }}
-                        title={c.label}
+                        title={
+                          c.label +
+                          (c.tagIncomplete ? " — Tags unvollständig (7 Pflichtfelder)" : "") +
+                          (onClipSelectEntryId ? " — Klick: Eintrag in der Liste fokussieren" : "")
+                        }
+                        onClick={
+                          onClipSelectEntryId
+                            ? (e) => {
+                                e.stopPropagation();
+                                onClipSelectEntryId(c.key);
+                              }
+                            : undefined
+                        }
+                        onKeyDown={
+                          onClipSelectEntryId
+                            ? (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  onClipSelectEntryId(c.key);
+                                }
+                              }
+                            : undefined
+                        }
                       >
                         <span className="playlist-timeline__clip-label mono-cell">{c.label}</span>
                       </div>

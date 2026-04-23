@@ -17,6 +17,7 @@ import {
   defaultTagsFromPlaylistTitle,
   DUPLICATE_MODAL_DISPLAY_KEYS,
   hasAnyAudioTagValue,
+  isTimelineTagsComplete,
   mergeAudioTags,
   mergeWarnungForDisplay,
   overlayFromForm,
@@ -805,6 +806,7 @@ export default function App() {
   const [musicDbMetadata, setMusicDbMetadata] = useState<Record<string, MusicDbFileMeta>>({});
   const [highlightMp3Name, setHighlightMp3Name] = useState<string | null>(null);
   const mp3RowRefs = useRef<Map<string, HTMLTableRowElement>>(new Map());
+  const edlPlaylistRowRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
   const [drag, setDrag] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [dupModal, setDupModal] = useState<DupModalState | null>(null);
@@ -3688,6 +3690,18 @@ export default function App() {
     });
   }, [playlist, tagStore]);
 
+  /** Nur Timeline: Zeilen-IDs, bei denen mindestens ein Pflichtfeld für die Vollständigkeitsanzeige fehlt. */
+  const playlistTagIncompleteByEntryId = useMemo(() => {
+    if (!playlist?.length) return {} as Readonly<Record<string, boolean>>;
+    const out: Record<string, boolean> = {};
+    for (let i = 0; i < playlist.length; i++) {
+      const row = playlist[i]!;
+      const merged = playlistMergedTags[i] ?? {};
+      if (!isTimelineTagsComplete(merged)) out[row.id] = true;
+    }
+    return out;
+  }, [playlist, playlistMergedTags]);
+
   const fileMergedTagsByName = useMemo(() => {
     const map = new Map<string, AudioTags>();
     for (const name of mp3KnownFromPlaylist) {
@@ -4171,6 +4185,40 @@ Oliver`,
       }
     },
     [sortedPlaylistRowIndices, edlSelectionAnchorPlaylistIndex, playlist]
+  );
+
+  /** Timeline-Clip → Zeile in der EDL-Tabelle wählen, Programm-TC setzen, sichtbar scrollen. */
+  const selectPlaylistEntryFromTimeline = useCallback(
+    (entryId: string) => {
+      if (!playlist?.length) return;
+      const playlistIndex = playlist.findIndex((r) => r.id === entryId);
+      if (playlistIndex < 0) return;
+      const row = playlist[playlistIndex];
+      if (!row) return;
+      if (!sortedPlaylistRowIndices.includes(playlistIndex)) {
+        setInfoMessage(
+          "Dieser Titel ist durch die Spaltenfilter ausgeblendet — Filter zurücksetzen, um die Zeile in der Liste zu fokussieren."
+        );
+        return;
+      }
+      if (!playlistAsCustomerExport) {
+        setEdlSelectedRowIndices(new Set([playlistIndex]));
+        setEdlSelectionAnchorPlaylistIndex(playlistIndex);
+      }
+      setEdlSeekToProgramFramesRequest({
+        programFrames: row.recInFrames,
+        requestId: ++edlSeekToProgramRequestIdRef.current,
+      });
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          edlPlaylistRowRefs.current.get(playlistIndex)?.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+          });
+        });
+      });
+    },
+    [playlist, sortedPlaylistRowIndices, playlistAsCustomerExport]
   );
 
   const onCustomerPlaylistCellClick = useCallback(
@@ -4929,6 +4977,10 @@ Oliver`,
                                 return (
                                   <tr
                                     key={row.id}
+                                    ref={(el) => {
+                                      if (el) edlPlaylistRowRefs.current.set(i, el);
+                                      else edlPlaylistRowRefs.current.delete(i);
+                                    }}
                                     className={
                                       [
                                         !playlistAsCustomerExport && "table-tr-clickable",
@@ -5155,6 +5207,8 @@ Oliver`,
                           ? edlTitle?.trim() || basenamePath(fileName)
                           : null
                       }
+                      tagIncompleteByEntryId={playlistTagIncompleteByEntryId}
+                      onTimelineClipSelectEntryId={selectPlaylistEntryFromTimeline}
                       seekToProgramFramesRequest={edlSeekToProgramFramesRequest}
                     />
                   </div>
@@ -5508,6 +5562,8 @@ Oliver`,
                     ? edlTitle?.trim() || basenamePath(fileName)
                     : null
                 }
+                tagIncompleteByEntryId={playlistTagIncompleteByEntryId}
+                onTimelineClipSelectEntryId={selectPlaylistEntryFromTimeline}
                 seekToProgramFramesRequest={edlSeekToProgramFramesRequest}
               />
             </div>
