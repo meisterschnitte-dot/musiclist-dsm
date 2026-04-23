@@ -34,8 +34,40 @@ function normalizeSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/** PDF zerlegt Wörter oft in kleine Fragmente; dann würde blindes `join(" ")` mitten im Wort Leerzeichen erzeugen. */
+function endsWithLowercaseLetter(s: string): boolean {
+  const ch = s[s.length - 1];
+  return ch !== undefined && /[a-zäöüß]/.test(ch);
+}
+
+/** Typisch „…beschrän“ + „kt“ → ohne Leerzeichen zusammenfügen. */
+function isShortLowercaseSuffixFragment(s: string): boolean {
+  return /^[a-zäöüß]{1,2}$/.test(s);
+}
+
+/**
+ * PDF-Zeilenteile zusammenfügen: nach bedarf ohne Leerzeichen (z. B. „haftungsbeschrän“ + „kt“).
+ * Enthält auch einen Fallback gegen das häufige „haftungsbeschrän kt“.
+ */
+function joinPdfCellParts(parts: string[]): string {
+  const tokens = parts
+    .map((p) => p.replace(/\u00ad/g, ""))
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  if (tokens.length === 0) return "";
+  let out = tokens[0]!;
+  for (let i = 1; i < tokens.length; i++) {
+    const next = tokens[i]!;
+    const glue = endsWithLowercaseLetter(out) && isShortLowercaseSuffixFragment(next);
+    out = glue ? out + next : `${out} ${next}`;
+  }
+  let s = normalizeSpaces(out);
+  s = s.replace(/haftungsbeschrän\s+kt/gi, "haftungsbeschränkt");
+  return s;
+}
+
 function joinCell(parts: string[]): string {
-  return normalizeSpaces(parts.join(" "));
+  return joinPdfCellParts(parts);
 }
 
 function normalizeLabelcodeCandidate(raw: string): string | null {

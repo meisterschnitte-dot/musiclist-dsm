@@ -25,6 +25,7 @@ import { createUserSessionSyncRouter } from "./userSessionSyncRoutes";
 import { createUserEdlRouter } from "./userEdlRoutes";
 import { createSharedTracksRouter } from "./sharedTracksRoutes";
 import { createMusikverlageRouter } from "./musikverlageRoutes";
+import { createSonofindMmdRouter } from "./sonofindMmdRoutes";
 import { getResolvedServerStoragePaths } from "./sharedTracksFs";
 import { streamFullDataBackupZip } from "./fullBackup";
 import { restoreDataDirectoryFromBackupZip } from "./restoreBackup";
@@ -148,6 +149,7 @@ app.use("/api", createUserEdlRouter());
 app.use("/api", createCustomerEdlRouter());
 app.use("/api", createSharedTracksRouter());
 app.use("/api", createMusikverlageRouter());
+app.use("/api", createSonofindMmdRouter());
 app.use("/api", createCustomersRouter());
 
 /** Nur Admins: vollständige ZIP-Sicherung von `data/` inkl. MP3s (Streaming). */

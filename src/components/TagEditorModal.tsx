@@ -16,6 +16,7 @@ import {
   type AudioTags,
 } from "../audio/audioTags";
 import {
+  findGvlEntryByLabel,
   findGvlEntryByLabelcode,
   loadGvlLabelDb,
   type GvlLabelDb,
@@ -32,7 +33,10 @@ import {
   BMGPM_SEARCH_URL,
 } from "../bmgProductionMusic";
 import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
-import { openSonotonSearchWithOptionalClip, SONOTON_SEARCH_BASE_URL } from "../sonotonSearch";
+import { APL_PUBLISHING_URL, openAplPublishingSearchWithOptionalClipAsync } from "../aplPublishingSearch";
+import { extractSonoFindMmdTrackcodeFromFilename, SONOTON_MMD_BASE_URL } from "../sonotonSearch";
+import { apiSonofindMmdFetch } from "../api/sonofindMmdApi";
+import { parseSonofindMmdXml } from "../audio/parseSonofindMmdXml";
 import { openEarmotionSearchWithOptionalClip, EARMOTION_ACCOUNT_URL } from "../earmotionSearch";
 import {
   openExtremeMusicSearchWithOptionalClip,
@@ -47,6 +51,10 @@ import {
   labelcodeWithLcPrefix,
   openBlankframeSearchWithOptionalClip,
 } from "../blankframeSearch";
+import {
+  looksLikeAplPublishingMetadata,
+  parseAplPublishingMetadataText,
+} from "../audio/parseAplPublishingMetadataText";
 import {
   looksLikeBmgPmMetadata,
   parseBmgPmMetadataText,
@@ -213,6 +221,8 @@ export function TagEditorModal({
   const [blankframeApiErr, setBlankframeApiErr] = useState<string | null>(null);
   const [wcpmApiBusy, setWcpmApiBusy] = useState(false);
   const [wcpmApiErr, setWcpmApiErr] = useState<string | null>(null);
+  const [sonotonMmdBusy, setSonotonMmdBusy] = useState(false);
+  const [sonotonMmdErr, setSonotonMmdErr] = useState<string | null>(null);
   const [labelcodeLookupHint, setLabelcodeLookupHint] = useState<string | null>(null);
   const [musicDbSearchBusy, setMusicDbSearchBusy] = useState(false);
   const [musicDbNoMatchHint, setMusicDbNoMatchHint] = useState<string | null>(null);
@@ -397,7 +407,9 @@ export function TagEditorModal({
   };
 
   const applyPastedOcr = () => {
-    const { fields, extraCommentLines } = looksLikeBmgPmMetadata(pasteDraft)
+    const { fields, extraCommentLines } = looksLikeAplPublishingMetadata(pasteDraft)
+      ? parseAplPublishingMetadataText(pasteDraft)
+      : looksLikeBmgPmMetadata(pasteDraft)
       ? parseBmgPmMetadataText(pasteDraft)
       : looksLikeAppleMusicCreditsText(pasteDraft)
         ? parseAppleMusicCreditsText(pasteDraft)
@@ -411,18 +423,26 @@ export function TagEditorModal({
                 ? parseBlankframeMetadataText(pasteDraft)
                 : parseGemaOcrText(pasteDraft);
     let mergedFields: Partial<AudioTags> = { ...fields };
-    const lc = mergedFields.labelcode?.trim();
-    if (lc) {
-      const db = gvlLabelDb ?? loadGvlLabelDb();
-      const entry = findGvlEntryByLabelcode(db, lc);
-      if (entry) {
-        mergedFields = {
-          ...mergedFields,
-          label: entry.label,
-          hersteller: entry.hersteller,
-          gvlRechte: entry.rechterueckrufe,
-        };
-      }
+    const db = gvlLabelDb ?? loadGvlLabelDb();
+    const labelTrim = mergedFields.label?.trim();
+    const lcTrim = mergedFields.labelcode?.trim();
+    const aplPaste = looksLikeAplPublishingMetadata(pasteDraft);
+    let entry: GvlLabelEntry | undefined;
+    if (aplPaste) {
+      if (labelTrim) entry = findGvlEntryByLabel(db, labelTrim);
+      if (!entry && lcTrim) entry = findGvlEntryByLabelcode(db, lcTrim);
+    } else {
+      if (lcTrim) entry = findGvlEntryByLabelcode(db, lcTrim);
+      if (!entry && labelTrim) entry = findGvlEntryByLabel(db, labelTrim);
+    }
+    if (entry) {
+      mergedFields = {
+        ...mergedFields,
+        label: entry.label,
+        labelcode: labelcodeWithLcPrefix(String(entry.labelcode ?? "").trim()),
+        hersteller: entry.hersteller,
+        gvlRechte: entry.rechterueckrufe,
+      };
     }
     const extraBlock = extraCommentLines.join("\n").trim();
     setForm((prev) => {
@@ -491,6 +511,52 @@ export function TagEditorModal({
       setBlankframeApiErr(e instanceof Error ? e.message : "Blankframe-API fehlgeschlagen.");
     } finally {
       setBlankframeApiBusy(false);
+    }
+  }, [p7SearchSource, gvlLabelDb]);
+
+  const onSonotonMmdClick = useCallback(async () => {
+    setSonotonMmdErr(null);
+    const src = p7SearchSource?.trim();
+    if (!src) {
+      setSonotonMmdErr("Kein Dateiname für SonoFind.");
+      return;
+    }
+    const code = extractSonoFindMmdTrackcodeFromFilename(src);
+    if (!code) {
+      setSonotonMmdErr(
+        "Im Dateinamen wurde kein MMD-Trackcode erkannt (Kennung oft zwischen _ … _, z. B. „AB-C032633“, „AB-27473893“ oder ohne Bindestrich „sk8463637464“ — min. 7 Zeichen, mit Ziffern)."
+      );
+      return;
+    }
+    setSonotonMmdBusy(true);
+    try {
+      const xml = await apiSonofindMmdFetch(code);
+      const partial = parseSonofindMmdXml(xml, code);
+      setForm((prev) => {
+        const next = { ...prev };
+        for (const k of Object.keys(partial) as (keyof typeof partial)[]) {
+          if (k === "warnung") continue;
+          const v = partial[k as keyof typeof partial];
+          if (typeof v !== "string" || !v.trim()) continue;
+          (next as Record<string, string>)[k] = v.trim();
+        }
+        const db = gvlLabelDb ?? loadGvlLabelDb();
+        const lc = next.labelcode?.trim();
+        let entry: GvlLabelEntry | undefined;
+        if (lc) entry = findGvlEntryByLabelcode(db, lc);
+        if (!entry && next.label?.trim()) entry = findGvlEntryByLabel(db, next.label.trim());
+        if (entry) {
+          next.label = entry.label;
+          next.labelcode = labelcodeWithLcPrefix(String(entry.labelcode ?? "").trim());
+          next.hersteller = entry.hersteller;
+          next.gvlRechte = entry.rechterueckrufe;
+        }
+        return next;
+      });
+    } catch (e) {
+      setSonotonMmdErr(e instanceof Error ? e.message : "SonoFind MMD fehlgeschlagen.");
+    } finally {
+      setSonotonMmdBusy(false);
     }
   }, [p7SearchSource, gvlLabelDb]);
 
@@ -833,10 +899,22 @@ export function TagEditorModal({
             <button
               type="button"
               className="btn-modal"
-              title={`${SONOTON_SEARCH_BASE_URL} — Suchbegriff (Dateiname bis zum ersten _) in die Zwischenablage; Suche mit vorausgefülltem Feld (search=).`}
-              onClick={() => openSonotonSearchWithOptionalClip(p7SearchSource)}
+              title={`${APL_PUBLISHING_URL} — nach erstem „_“: z. B. APL 517_… in die Zwischenablage, dann APL-Website. Metadaten unten einfügen und „Felder übernehmen“ — GVL per Label.`}
+              onClick={() => void openAplPublishingSearchWithOptionalClipAsync(p7SearchSource)}
             >
-              Sonoton-Suche
+              APL-Suche
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              disabled={sonotonMmdBusy}
+              title={
+                `${SONOTON_MMD_BASE_URL} — Öffentliches MMD-XML (Trackcode aus dem Dateinamen, ` +
+                `z. B. „AB-C032633“ / „sk8463637464“ in einem per _ getrennten Segment; Tags füllen, GVL-Abgleich aus Label/Labelcode.`
+              }
+              onClick={() => void onSonotonMmdClick()}
+            >
+              {sonotonMmdBusy ? "SonoFind …" : "Sonoton-Suche"}
             </button>
             <button
               type="button"
@@ -884,6 +962,11 @@ export function TagEditorModal({
             {wcpmApiErr ? (
               <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
                 {wcpmApiErr}
+              </p>
+            ) : null}
+            {sonotonMmdErr ? (
+              <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
+                {sonotonMmdErr}
               </p>
             ) : null}
             {onMusicDatabaseSearch ? (

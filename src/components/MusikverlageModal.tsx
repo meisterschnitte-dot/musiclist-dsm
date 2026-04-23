@@ -14,7 +14,7 @@ import { APPLE_MUSIC_SEARCH_URL } from "../appleMusicSearch";
 import { P7S1_MUSIKPORTAL_TRACK_RESEARCH_URL } from "../p7s1Musikportal";
 import { UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
 import { BMGPM_SEARCH_URL } from "../bmgProductionMusic";
-import { SONOTON_SEARCH_BASE_URL } from "../sonotonSearch";
+import { SONOTON_MMD_BASE_URL, SONOTON_SEARCH_BASE_URL } from "../sonotonSearch";
 import { EXTREME_MUSIC_URL } from "../extremeMusicSearch";
 import { EARMOTION_ACCOUNT_URL } from "../earmotionSearch";
 import { BLANKFRAME_URL } from "../blankframeSearch";
@@ -38,7 +38,10 @@ const MUSIKVERLAG_DEFAULTS: Partial<
   apple: { url: APPLE_MUSIC_SEARCH_URL },
   upm: { url: UPM_SEARCH_URL },
   bmgpm: { url: BMGPM_SEARCH_URL },
-  sonoton: { url: SONOTON_SEARCH_BASE_URL },
+  sonoton: {
+    url: SONOTON_MMD_BASE_URL,
+    integrationHint: `Öffentliches MMD (XML) pro Track, z. B. ${SONOTON_MMD_BASE_URL}AB-C032633. Fallback-Websuche: ${SONOTON_SEARCH_BASE_URL}.`,
+  },
   extreme: { url: EXTREME_MUSIC_URL },
   earmotion: { url: EARMOTION_ACCOUNT_URL },
   blankframe: {

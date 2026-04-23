@@ -123,3 +123,39 @@ export function findGvlEntryByLabelcode(
   if (!n) return undefined;
   return db.entries.find((e) => normalizeLabelcodeForMatch(e.labelcode) === n);
 }
+
+function normalizeGvlLabelForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Treffer über die Spalte „Label“ (z. B. APL-Publishing-Kopiertext); nicht für jedes Teilwort geeignet.
+ */
+export function findGvlEntryByLabel(db: GvlLabelDb | null, labelRaw: string): GvlLabelEntry | undefined {
+  if (!db?.entries?.length || !labelRaw?.trim()) return undefined;
+  const q = normalizeGvlLabelForMatch(labelRaw);
+  if (q.length < 3) return undefined;
+  let best: GvlLabelEntry | undefined;
+  let bestScore = 0;
+  for (const e of db.entries) {
+    for (const cand of [e.label, e.kuerzel].filter((x) => String(x ?? "").trim().length >= 2)) {
+      const el = normalizeGvlLabelForMatch(String(cand));
+      if (!el) continue;
+      if (el === q) return e;
+      let score = 0;
+      if (el.includes(q)) score = q.length + 10;
+      else if (q.includes(el)) score = el.length + 5;
+      if (score > bestScore) {
+        bestScore = score;
+        best = e;
+      }
+    }
+  }
+  return bestScore >= 8 ? best : undefined;
+}
