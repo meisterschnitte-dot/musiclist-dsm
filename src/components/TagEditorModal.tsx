@@ -39,7 +39,15 @@ import {
 import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
 import { APL_PUBLISHING_URL, openAplPublishingSearchWithOptionalClipAsync } from "../aplPublishingSearch";
 import { BIBLIOTHEQUE_MUSIC_URL, openBibliothequeMusicWithOptionalClipAsync } from "../bibliothequeMusic";
+import {
+  AUDIONETWORK_DE_SEARCH_URL,
+  openAudioNetworkSearchWithOptionalClipAsync,
+} from "../audioNetwork";
 import { CEZAME_DE_URL, openCezameSearchWithOptionalClipAsync } from "../cezameSearch";
+import {
+  looksLikeAudioNetworkMetadataText,
+  parseAudioNetworkMetadataText,
+} from "../audio/parseAudioNetworkMetadataText";
 import {
   looksLikeBibliothequeMusicMetadataText,
   parseBibliothequeMusicMetadataText,
@@ -431,6 +439,8 @@ export function TagEditorModal({
               ? parseEarmotionMetadataText(pasteDraft)
               : looksLikeBlankframeMetadata(pasteDraft)
                 ? parseBlankframeMetadataText(pasteDraft)
+                : looksLikeAudioNetworkMetadataText(pasteDraft)
+                  ? parseAudioNetworkMetadataText(pasteDraft)
                 : looksLikeBibliothequeMusicMetadataText(pasteDraft)
                   ? parseBibliothequeMusicMetadataText(pasteDraft)
                   : looksLikeCezameMetadataText(pasteDraft)
@@ -442,8 +452,9 @@ export function TagEditorModal({
     const lcTrim = mergedFields.labelcode?.trim();
     const aplPaste = looksLikeAplPublishingMetadata(pasteDraft);
     const bibliothequePaste = looksLikeBibliothequeMusicMetadataText(pasteDraft);
+    const audioNetworkPaste = looksLikeAudioNetworkMetadataText(pasteDraft);
     let entry: GvlLabelEntry | undefined;
-    if (aplPaste || bibliothequePaste) {
+    if (aplPaste || bibliothequePaste || audioNetworkPaste) {
       if (labelTrim) entry = findGvlEntryByLabel(db, labelTrim);
       if (!entry && lcTrim) entry = findGvlEntryByLabelcode(db, lcTrim);
     } else {
@@ -761,8 +772,9 @@ export function TagEditorModal({
         {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
-            Text aus GEMA / Google Lens / BMG PM / Apple Music / Bibliothèque (Track, Code, Publisher,
-            …) / Cézame (Titre, LC, ISRC, …) / Sonoton / Extreme Music / Earmotion / Blankframe
+            Text aus GEMA / Google Lens / BMG PM / Apple Music / Audio Network (Titel, Tabelle) /
+            Bibliothèque (Track, Code, Publisher, …) / Cézame (Titre, LC, ISRC, …) / Sonoton / Extreme
+            Music / Earmotion / Blankframe
           </div>
           <textarea
             className="tag-import-textarea"
@@ -918,6 +930,15 @@ export function TagEditorModal({
               onClick={() => void openAplPublishingSearchWithOptionalClipAsync(p7SearchSource)}
             >
               APL
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              aria-label="Audio Network de.audionetwork.com"
+              title={`${AUDIONETWORK_DE_SEARCH_URL} — Trackcode: Zeichenkette ab Dateibeginn bis vor dem ersten Unterstrich (z. B. ANW3920_… → ANW3920) in die Zwischenablage; Suche in neuem Tab (Suchfeld: Strg+V / ⌘V). Tabelle (Title, …, ISRC, Labelcode) unten einfügen — GVL per Label, dann Labelcode.`}
+              onClick={() => void openAudioNetworkSearchWithOptionalClipAsync(p7SearchSource)}
+            >
+              AN
             </button>
             <button
               type="button"
