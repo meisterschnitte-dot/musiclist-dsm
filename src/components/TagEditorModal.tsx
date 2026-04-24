@@ -38,7 +38,12 @@ import {
 } from "../bmgProductionMusic";
 import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
 import { APL_PUBLISHING_URL, openAplPublishingSearchWithOptionalClipAsync } from "../aplPublishingSearch";
+import { BIBLIOTHEQUE_MUSIC_URL, openBibliothequeMusicWithOptionalClipAsync } from "../bibliothequeMusic";
 import { CEZAME_DE_URL, openCezameSearchWithOptionalClipAsync } from "../cezameSearch";
+import {
+  looksLikeBibliothequeMusicMetadataText,
+  parseBibliothequeMusicMetadataText,
+} from "../audio/parseBibliothequeMusicMetadataText";
 import { extractSonoFindMmdTrackcodeFromFilename, SONOTON_MMD_BASE_URL } from "../sonotonSearch";
 import { apiSonofindMmdFetch } from "../api/sonofindMmdApi";
 import { parseSonofindMmdXml } from "../audio/parseSonofindMmdXml";
@@ -426,16 +431,19 @@ export function TagEditorModal({
               ? parseEarmotionMetadataText(pasteDraft)
               : looksLikeBlankframeMetadata(pasteDraft)
                 ? parseBlankframeMetadataText(pasteDraft)
-                : looksLikeCezameMetadataText(pasteDraft)
-                  ? parseCezameMetadataText(pasteDraft)
-                  : parseGemaOcrText(pasteDraft);
+                : looksLikeBibliothequeMusicMetadataText(pasteDraft)
+                  ? parseBibliothequeMusicMetadataText(pasteDraft)
+                  : looksLikeCezameMetadataText(pasteDraft)
+                    ? parseCezameMetadataText(pasteDraft)
+                    : parseGemaOcrText(pasteDraft);
     let mergedFields: Partial<AudioTags> = { ...fields };
     const db = gvlLabelDb ?? loadGvlLabelDb();
     const labelTrim = mergedFields.label?.trim();
     const lcTrim = mergedFields.labelcode?.trim();
     const aplPaste = looksLikeAplPublishingMetadata(pasteDraft);
+    const bibliothequePaste = looksLikeBibliothequeMusicMetadataText(pasteDraft);
     let entry: GvlLabelEntry | undefined;
-    if (aplPaste) {
+    if (aplPaste || bibliothequePaste) {
       if (labelTrim) entry = findGvlEntryByLabel(db, labelTrim);
       if (!entry && lcTrim) entry = findGvlEntryByLabelcode(db, lcTrim);
     } else {
@@ -753,8 +761,8 @@ export function TagEditorModal({
         {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
-            Text aus GEMA / Google Lens / BMG PM / Apple Music / Cézame (Titre, LC, ISRC, …) / Sonoton /
-            Extreme Music / Earmotion / Blankframe
+            Text aus GEMA / Google Lens / BMG PM / Apple Music / Bibliothèque (Track, Code, Publisher,
+            …) / Cézame (Titre, LC, ISRC, …) / Sonoton / Extreme Music / Earmotion / Blankframe
           </div>
           <textarea
             className="tag-import-textarea"
@@ -910,6 +918,15 @@ export function TagEditorModal({
               onClick={() => void openAplPublishingSearchWithOptionalClipAsync(p7SearchSource)}
             >
               APL
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              aria-label="Bibliothèque Music bibliothequemusic.com"
+              title={`${BIBLIOTHEQUE_MUSIC_URL} — Trackcode: optional mit Doppelpunkt im Stamm, wie CEZ: zwischen erstem und zweitem Unterstrich; bei nur einem Unterstrich: Rest nach dem Unterstrich. Zwischenablage; Suchseite mit ?q= (fällt ggf. zurück — dann einfügen).`}
+              onClick={() => void openBibliothequeMusicWithOptionalClipAsync(p7SearchSource)}
+            >
+              BC
             </button>
             <button
               type="button"
