@@ -5140,6 +5140,44 @@ tr:hover td {
   white-space: nowrap;
 }
 
+/** Spalte «#»: leichtes Rot wie Timeline-Clips, wenn 7 Tag-Pflichtfelder nicht komplett. */
+.table-dense tbody tr td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, rgba(150, 70, 70, 0.5) 0%, rgba(110, 50, 50, 0.4) 100%);
+  color: #f0d0d0;
+}
+
+.table-dense tbody tr:hover td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, rgba(165, 80, 80, 0.55) 0%, rgba(120, 58, 58, 0.45) 100%);
+  color: #f5dede;
+}
+
+.table-dense tbody tr.table-tr-selected td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, rgba(120, 65, 88, 0.58) 0%, rgba(88, 52, 72, 0.48) 100%);
+  color: #f2e0e0;
+}
+
+.table-dense tbody tr.table-tr-selected:hover td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, rgba(128, 72, 95, 0.62) 0%, rgba(92, 58, 76, 0.52) 100%);
+  color: #f5e8e8;
+}
+
+.table-dense tbody tr.table-tr-warnung td.edl-td-num--incomplete-tags {
+  color: #f5c4c4;
+}
+
+.table-dense tbody tr.table-tr-offline-mp3 td.edl-td-num--incomplete-tags {
+  color: #4a1a1a;
+}
+
+.table-dense tbody tr.table-tr-music-db-missing td.edl-td-num--incomplete-tags {
+  color: #3d1515;
+}
+
+.table-dense td.edl-td-num--incomplete-tags.table-td-customer-cell--active {
+  outline: 1px solid rgba(200, 100, 100, 0.7);
+  outline-offset: -2px;
+}
+
 .track {
   color: var(--app-focus);
   font-weight: 500;
@@ -5387,6 +5425,26 @@ html[data-theme="light"] .panel-head .panel-title {
 html[data-theme="light"] table th,
 html[data-theme="light"] table td {
   color: #000000;
+}
+
+html[data-theme="light"] .table-dense tbody tr td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, #fde5e5 0%, #f5c8c8 100%) !important;
+  color: #3d1010 !important;
+}
+
+html[data-theme="light"] .table-dense tbody tr:hover td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, #f8d8d8 0%, #edc0c0 100%) !important;
+  color: #2a0a0a !important;
+}
+
+html[data-theme="light"] .table-dense tbody tr.table-tr-selected td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, #e8c8d8 0%, #d8b0b8 100%) !important;
+  color: #2a0808 !important;
+}
+
+html[data-theme="light"] .table-dense tbody tr.table-tr-selected:hover td.edl-td-num--incomplete-tags {
+  background: linear-gradient(180deg, #e2bed0 0%, #d2a8b0 100%) !important;
+  color: #220606 !important;
 }
 
 html[data-theme="light"] .table-th-customer {

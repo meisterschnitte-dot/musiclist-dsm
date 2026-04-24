@@ -23,6 +23,10 @@ import {
   type GvlLabelEntry,
 } from "../storage/gvlLabelStore";
 import { parseGemaOcrText } from "../audio/parseGemaOcrText";
+import {
+  looksLikeCezameMetadataText,
+  parseCezameMetadataText,
+} from "../audio/parseCezameMetadataText";
 import { openAppleMusicWithOptionalClip, APPLE_MUSIC_SEARCH_URL } from "../appleMusicSearch";
 import {
   openP7S1MusikportalWithOptionalClip,
@@ -34,6 +38,7 @@ import {
 } from "../bmgProductionMusic";
 import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
 import { APL_PUBLISHING_URL, openAplPublishingSearchWithOptionalClipAsync } from "../aplPublishingSearch";
+import { CEZAME_DE_URL, openCezameSearchWithOptionalClipAsync } from "../cezameSearch";
 import { extractSonoFindMmdTrackcodeFromFilename, SONOTON_MMD_BASE_URL } from "../sonotonSearch";
 import { apiSonofindMmdFetch } from "../api/sonofindMmdApi";
 import { parseSonofindMmdXml } from "../audio/parseSonofindMmdXml";
@@ -421,7 +426,9 @@ export function TagEditorModal({
               ? parseEarmotionMetadataText(pasteDraft)
               : looksLikeBlankframeMetadata(pasteDraft)
                 ? parseBlankframeMetadataText(pasteDraft)
-                : parseGemaOcrText(pasteDraft);
+                : looksLikeCezameMetadataText(pasteDraft)
+                  ? parseCezameMetadataText(pasteDraft)
+                  : parseGemaOcrText(pasteDraft);
     let mergedFields: Partial<AudioTags> = { ...fields };
     const db = gvlLabelDb ?? loadGvlLabelDb();
     const labelTrim = mergedFields.label?.trim();
@@ -746,15 +753,15 @@ export function TagEditorModal({
         {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
-            Text aus GEMA / Google Lens / BMG PM / Apple Music / Sonoton / Extreme Music / Earmotion /
-            Blankframe
+            Text aus GEMA / Google Lens / BMG PM / Apple Music / Cézame (Titre, LC, ISRC, …) / Sonoton /
+            Extreme Music / Earmotion / Blankframe
           </div>
           <textarea
             className="tag-import-textarea"
             value={pasteDraft}
             onChange={(e) => setPasteDraft(e.target.value)}
             placeholder={
-              "TITEL …\nCD …\nJAHR …\n\nBlankframe z. B.:\nDystopia = Songtitel\n\nSpheric Pulses = Albumtitel"
+              "TITEL …\nCD …\nJAHR …\n\nCézame z. B.:\nTitre :  A Part of Me = Songtitel\nLC :  10347 = Labelcode\n\nBlankframe z. B.:\nDystopia = Songtitel"
             }
             rows={5}
             spellCheck={false}
@@ -886,7 +893,7 @@ export function TagEditorModal({
               title={`${UPM_SEARCH_URL} — bei Dateinamen mit Präfix UPM_: Katalogteil (z. B. ESW2878_17) in die Zwischenablage und Such-URL mit searchString.`}
               onClick={() => void openUpmSearchWithOptionalClipAsync(p7SearchSource)}
             >
-              UPM-Suche
+              UPM
             </button>
             <button
               type="button"
@@ -894,7 +901,7 @@ export function TagEditorModal({
               title={`${BMGPM_SEARCH_URL} — bei BMGPM_: Kennung nach dem ersten Unterstrich + erstes Wort des Titels (nach dem 3. Unterstrich) in die Zwischenablage, z. B. „LKY0123 RISE“.`}
               onClick={() => void openBmgPmSearchWithOptionalClipAsync(p7SearchSource)}
             >
-              BMGPM-Suche
+              BMGPM
             </button>
             <button
               type="button"
@@ -902,7 +909,16 @@ export function TagEditorModal({
               title={`${APL_PUBLISHING_URL} — nach erstem „_“: z. B. APL 517_… in die Zwischenablage, dann APL-Website. Metadaten unten einfügen und „Felder übernehmen“ — GVL per Label.`}
               onClick={() => void openAplPublishingSearchWithOptionalClipAsync(p7SearchSource)}
             >
-              APL-Suche
+              APL
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              aria-label="Cézame de.cezamemusic.com"
+              title={`${CEZAME_DE_URL} — Trackcode = Text zwischen dem ersten und zweiten Unterstrich im Dateinamen, wird in die Zwischenablage kopiert; Cézame-Seite öffnet im neuen Tab — Suchfeld: Strg+V / ⌘V (direktes Vorbefüllen durch die Seite ist nicht vorgesehen).`}
+              onClick={() => void openCezameSearchWithOptionalClipAsync(p7SearchSource)}
+            >
+              CEZ
             </button>
             <button
               type="button"
@@ -914,7 +930,7 @@ export function TagEditorModal({
               }
               onClick={() => void onSonotonMmdClick()}
             >
-              {sonotonMmdBusy ? "SonoFind …" : "Sonoton-Suche"}
+              {sonotonMmdBusy ? "SonoFind …" : "Sonoton"}
             </button>
             <button
               type="button"
@@ -922,7 +938,7 @@ export function TagEditorModal({
               title={`${EXTREME_MUSIC_URL} — Ersten Code bis zur ersten Leerzeile (z. B. aus dem Dateinamen) in die Zwischenablage; auf der Seite einfügen und Metadaten hier wieder einfügen.`}
               onClick={() => openExtremeMusicSearchWithOptionalClip(p7SearchSource)}
             >
-              Extreme-Suche
+              Extreme
             </button>
             <button
               type="button"
@@ -930,7 +946,7 @@ export function TagEditorModal({
               title={`${EARMOTION_ACCOUNT_URL} — Mit „- EARMOTION“: Text davor; sonst ganzer Dateiname. Endungen .mp3/.wav werden nicht kopiert. Auf der Seite Strg+V / ⌘V.`}
               onClick={() => openEarmotionSearchWithOptionalClip(p7SearchSource)}
             >
-              Earmotion-Suche
+              Earmotion
             </button>
             <button
               type="button"
@@ -943,7 +959,7 @@ export function TagEditorModal({
               }
               onClick={() => void onBlankframeSearchClick()}
             >
-              {blankframeApiBusy ? "Blankframe …" : "Blankframe-Suche"}
+              {blankframeApiBusy ? "Blankframe …" : "Blankframe"}
             </button>
             <button
               type="button"

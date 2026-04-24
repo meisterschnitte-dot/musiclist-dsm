@@ -4974,6 +4974,8 @@ Oliver`,
                                   !!linked &&
                                   isMp3FileName(linked) &&
                                   resolveMusicDbPathForBasename(musicDbFileNames, linked) === null;
+                                const edlNumIncompleteTitle =
+                                  "Tags unvollständig: mindestens eines der Felder Songtitel, Interpret, Album, Komponist, Labelcode, Label, Hersteller fehlt.";
                                 return (
                                   <tr
                                     key={row.id}
@@ -5026,12 +5028,15 @@ Oliver`,
                                       const cellActive =
                                         playlistAsCustomerExport &&
                                         customerSelectedCells.has(customerCellKey(i, colId));
+                                      const numIncomplete =
+                                        colId === "num" && playlistTagIncompleteByEntryId[row.id];
                                       return (
                                         <td
                                           key={colId}
                                           className={
                                             [
                                               edlDataCellClass(colId),
+                                              numIncomplete && "edl-td-num--incomplete-tags",
                                               playlistAsCustomerExport && "table-td-customer-cell",
                                               cellActive && "table-td-customer-cell--active",
                                             ]
@@ -5045,10 +5050,14 @@ Oliver`,
                                           }
                                           title={
                                             playlistAsCustomerExport
-                                              ? (colId === "labelcode"
-                                                  ? "Klick: Labelcode-Ziffern in die Zwischenablage (ohne „LC “) · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben"
-                                                  : "Klick: Zelle kopieren · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben")
-                                              : undefined
+                                              ? colId === "labelcode"
+                                                ? "Klick: Labelcode-Ziffern in die Zwischenablage (ohne „LC “) · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben"
+                                                : colId === "num" && numIncomplete
+                                                  ? edlNumIncompleteTitle
+                                                  : "Klick: Zelle kopieren · Umschalt+Klick: Bereich in der Zeile kopieren (Tab-getrennt) · Strg/Cmd+Klick: Mehrfachauswahl · Strg/Cmd+C: Auswahl kopieren · Esc: Aufheben"
+                                              : numIncomplete
+                                                ? edlNumIncompleteTitle
+                                                : undefined
                                           }
                                         >
                                           {renderEdlDataCell(colId, row, i, plMerged)}
