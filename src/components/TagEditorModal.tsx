@@ -451,10 +451,11 @@ export function TagEditorModal({
     const labelTrim = mergedFields.label?.trim();
     const lcTrim = mergedFields.labelcode?.trim();
     const aplPaste = looksLikeAplPublishingMetadata(pasteDraft);
+    const bmgPaste = looksLikeBmgPmMetadata(pasteDraft);
     const bibliothequePaste = looksLikeBibliothequeMusicMetadataText(pasteDraft);
     const audioNetworkPaste = looksLikeAudioNetworkMetadataText(pasteDraft);
     let entry: GvlLabelEntry | undefined;
-    if (aplPaste || bibliothequePaste || audioNetworkPaste) {
+    if (aplPaste || bmgPaste || bibliothequePaste || audioNetworkPaste) {
       if (labelTrim) entry = findGvlEntryByLabel(db, labelTrim);
       if (!entry && lcTrim) entry = findGvlEntryByLabelcode(db, lcTrim);
     } else {

@@ -33,6 +33,14 @@ function parseLine(line: string): { key: string; rawValue: string } | null {
 export function looksLikeBmgPmMetadata(text: string): boolean {
   const t = text.trim();
   if (t.length < 40) return false;
+  if (
+    /label\s*:/i.test(t) &&
+    /album\s+code\s*:/i.test(t) &&
+    /track\s+title\s*:/i.test(t) &&
+    /isrc\s*:/i.test(t)
+  ) {
+    return true;
+  }
   return (
     /album\s+code\s*:/i.test(t) &&
     /track\s+title\s*:/i.test(t) &&
@@ -41,7 +49,7 @@ export function looksLikeBmgPmMetadata(text: string): boolean {
 }
 
 /**
- * Mappt BMG-Zeilen auf AudioTags. Label wird absichtlich nicht gesetzt (Hinweis „nicht im Label eintragen“).
+ * Mappt BMG-Zeilen auf AudioTags. „Label:“ füllt das Label-Feld — für GVL-Abgleich (Labelcode fehlt im Portal oft).
  */
 export function parseBmgPmMetadataText(raw: string): ParseGemaOcrResult {
   const lines = raw.split(/\r?\n/).map((l) => l.trim());
@@ -61,7 +69,8 @@ export function parseBmgPmMetadataText(raw: string): ParseGemaOcrResult {
     const val = valueBeforeEqualsNote(rawValue);
 
     if (key === "label") {
-      /* absichtlich kein label setzen */
+      const lab = val.replace(/\s+/g, " ").trim();
+      if (lab) fields.label = lab;
       continue;
     }
     if (key === "album code") {
