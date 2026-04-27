@@ -30,12 +30,21 @@ const TIMELINE_MIN_PX = 160;
 
 type MediaKind = "audio" | "video" | null;
 
+function isWavFile(file: File): boolean {
+  const n = file.name.toLowerCase();
+  if (/\.(wav|wave)$/i.test(n)) return true;
+  const t = file.type.toLowerCase();
+  return t === "audio/wav" || t === "audio/wave" || t === "audio/x-wav" || t === "audio/vnd.wave";
+}
+
 function guessKind(file: File): MediaKind {
   const t = file.type.toLowerCase();
   const n = file.name.toLowerCase();
   if (t.startsWith("video/") || /\.mp4$/i.test(n)) return "video";
-  if (t.startsWith("audio/") || /\.(mp3|wav|wave)$/i.test(n)) return "audio";
-  if (/\.(mp3|wav|mp4)$/i.test(n)) return n.endsWith(".mp4") ? "video" : "audio";
+  /** Wie MP4: großes Fenster, DnD, Leertaste, Playhead + Timeline-Seek. */
+  if (isWavFile(file)) return "video";
+  if (t.startsWith("audio/") || /\.mp3$/i.test(n)) return "audio";
+  if (/\.(mp3|mp4)$/i.test(n)) return n.endsWith(".mp4") ? "video" : "audio";
   return "audio";
 }
 
@@ -86,7 +95,8 @@ function findPlaylistRowForFileName(
 }
 
 /**
- * Lokaler Mediaplayer (MP3, WAV, MP4) unter der Musikdatenbank.
+ * Lokaler Mediaplayer (MP3, WAV, MP4) unter der Musikdatenbank. WAV und MP4 teilen
+ * dasselbe Anzeigefenster (HTML-Video) und die Timeline; MP3 bleibt die kompakte Vorschau.
  * Anbindung an Server-/Bibliotheksdateien kann später ergänzt werden.
  */
 export function MediaPlayerDock({
@@ -435,7 +445,7 @@ export function MediaPlayerDock({
               ]
                 .filter(Boolean)
                 .join(" ")}
-              aria-label="Video"
+              aria-label="Video- oder Wellenform-Audio (WAV) im selben Anzeigefeld"
               onDragEnter={(e: DragEvent) => {
                 e.preventDefault();
                 if (e.dataTransfer.types.includes("Files")) setVideoSlotDragOver(true);

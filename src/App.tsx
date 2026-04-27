@@ -56,7 +56,7 @@ import {
 import { parseEdl } from "./edl/parseEdl";
 import { eventsToMergedPlaylist } from "./edl/mergePlaylist";
 import { netPlaylistTrackCount } from "./edl/netPlaylistTrackCount";
-import { playlistDurationTimecode } from "./edl/timecode";
+import { DEFAULT_FPS, playlistDurationTimecode } from "./edl/timecode";
 import type { PlaylistEntry } from "./edl/types";
 import {
   collectTagStoreKeysForRemovedMusicPaths,
@@ -205,6 +205,12 @@ import {
   exportPlaylistColumnIds,
   exportPlaylistViewToXlsx,
 } from "./edl/exportPlaylistViewXls";
+import {
+  buildAvidMarkerXmlString,
+  collectAvidWarningMarkerRows,
+  defaultAvidMarkerXmlFileName,
+  downloadAvidMarkerXmlFile,
+} from "./edl/exportAvidMarkerXml";
 import { arrayBufferToBase64 } from "./api/sendPlaylistMailApi";
 import {
   lookupPlaylistPendingCustomerRequest,
@@ -237,6 +243,9 @@ const GVL_ABGLEICH_TOOLTIP =
 
 const XLS_EXPORT_TOOLTIP =
   "Export: wie die Ansicht (Sortierung, Filter), aber ohne Spalten „Titel / Quelle“ und „Jahr“; Spalte # als Zahl. GEMA-Listenstil: Titelleiste, Datum, graue Kopfzeile, Rahmen.";
+
+const AVID_MARKER_XML_TOOLTIP =
+  "Nur Einträge mit Warnung: Avid StreamItems-XML (wie MC-Marker-Export, DOCTYPE Avid:StreamItems; Start-TC = rec in; Kommentar = Tag-Felder mit „ - “; Farbe rot; Spur V1). Import: Tools → Markers → Import Markers (Text/XML).";
 
 const PLAYLIST_MAIL_TOOLTIP =
   "Dialog zum Versand der GEMA-Übersicht als Excel-Anhang per E-Mail an Kundenadressen (nur Administratoren).";
@@ -3842,6 +3851,21 @@ export default function App() {
     playlistMergedTags,
   ]);
 
+  const requestPlaylistAvidMarkerXmlExport = useCallback(() => {
+    if (!playlist?.length || exportBusy || !fileName) return;
+    const rows = collectAvidWarningMarkerRows(playlist, playlistMergedTags, DEFAULT_FPS);
+    if (rows.length === 0) {
+      setInfoMessage("Keine Tracks mit Warnung in dieser Playlist.");
+      return;
+    }
+    const xml = buildAvidMarkerXmlString(
+      rows.map(({ timecode, comment }) => ({ timecode, comment })),
+      DEFAULT_FPS
+    );
+    downloadAvidMarkerXmlFile(xml, defaultAvidMarkerXmlFileName(fileName));
+    setInfoMessage(`Avid-Marker-XML: ${rows.length} Position${rows.length === 1 ? "" : "en"} (Start-TC).`);
+  }, [playlist, exportBusy, fileName, playlistMergedTags]);
+
   const requestPlaylistMailExport = useCallback(async () => {
     if (!playlist?.length || exportBusy || !fileName) return;
     try {
@@ -4819,6 +4843,15 @@ Oliver`,
                         <button
                           type="button"
                           className="btn-transfer-mp3"
+                          title={AVID_MARKER_XML_TOOLTIP}
+                          disabled={!playlist?.length || exportBusy || !fileName}
+                          onClick={() => requestPlaylistAvidMarkerXmlExport()}
+                        >
+                          XML-Export
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-transfer-mp3"
                           title={XLS_EXPORT_TOOLTIP}
                           disabled={!playlist?.length || exportBusy || !fileName}
                           onClick={() => void requestPlaylistXlsExport()}
@@ -4837,6 +4870,15 @@ Oliver`,
                       </div>
                     ) : (
                       <div className="panel-head-edl-actions panel-head-edl-actions--customer-hint">
+                        <button
+                          type="button"
+                          className="btn-transfer-mp3"
+                          title={AVID_MARKER_XML_TOOLTIP}
+                          disabled={!playlist?.length || exportBusy || !fileName}
+                          onClick={() => requestPlaylistAvidMarkerXmlExport()}
+                        >
+                          XML-Export
+                        </button>
                         <button
                           type="button"
                           className="btn-transfer-mp3"
