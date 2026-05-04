@@ -36,6 +36,8 @@
   --app-resizer-hover: #3d4a5c;
   --app-font-scale-value: #d0d6de;
   --app-info-success: #8fbc9e;
+  --dup-filename-full: #4ade80;
+  --dup-filename-partial: #fb923c;
   --app-splitter-bg: #1a1f28;
   --app-splitter-hover: #252b34;
   --app-shadow-heavy: rgba(0, 0, 0, 0.45);
@@ -113,6 +115,8 @@ html[data-theme="light"] {
   --app-resizer-hover: #5a6878;
   --app-font-scale-value: #000000;
   --app-info-success: #1d5a38;
+  --dup-filename-full: #15803d;
+  --dup-filename-partial: #c2410c;
   --app-splitter-bg: #b8c0cc;
   --app-splitter-hover: #a8b0c0;
   --app-shadow-heavy: rgba(0, 0, 0, 0.18);
@@ -4138,6 +4142,39 @@ body {
   overflow-wrap: anywhere;
   word-break: break-word;
   width: 100%;
+}
+
+/* Duplikat-Dialog: Dateiname-Vergleich (Transfer zu MP3, Tag-Suche) */
+.modal-dup-filename--full-match {
+  color: var(--dup-filename-full);
+  font-weight: 600;
+}
+
+.modal-dup-filename--partial-wrap .modal-dup-filename--part-match {
+  color: var(--dup-filename-partial);
+  font-weight: 600;
+}
+
+.modal-dup-filename--partial-wrap .modal-dup-filename--part-rest {
+  color: var(--app-text);
+  font-weight: 400;
+}
+
+.modal-dup-neu-compare-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.5rem;
+  margin-bottom: 0.3rem;
+  font-family: ui-monospace, "Cascadia Code", "Cascadia Mono", "Segoe UI Mono", monospace;
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+.modal-dup-neu-compare-label {
+  color: var(--app-text-muted);
+  flex-shrink: 0;
+  font-weight: 500;
 }
 
 .modal-value--dup {

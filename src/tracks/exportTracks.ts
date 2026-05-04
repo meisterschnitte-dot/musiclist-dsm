@@ -142,6 +142,15 @@ export function findDuplicateCandidatesInMusicDbPaths(
   return out;
 }
 
+/**
+ * Genau ein Treffer mit 100 % gleichem Dateinamen (case-insensitive) — kein Duplikat-Dialog, Zuordnung wie „Ist identisch“.
+ */
+function isSingleExactFilenameDuplicate(
+  conflicts: DuplicateCandidate[]
+): conflicts is [DuplicateCandidate] {
+  return conflicts.length === 1 && conflicts[0].kind === "exact";
+}
+
 /** ID3 der Kandidaten-Pfade (Server-Musikdatenbank), für Duplikat-Dialog. */
 export async function loadCandidateTagsFromSharedMusicDb(
   paths: string[]
@@ -340,18 +349,33 @@ export async function exportFakeTracksToTracksFolder(
 
     if (conflicts.length > 0) {
       const proposedTags: AudioTags = getTagsForIndex?.(index) ? { ...getTagsForIndex(index)! } : {};
-      const candidateTagsByPath: Record<string, AudioTags> = {};
-      for (const c of conflicts) {
-        candidateTagsByPath[c.existingFileName] = await readTagsFromLocalMp3Path(tracksDir, c.existingFileName);
+      let choice: DuplicateChoice;
+      if (isSingleExactFilenameDuplicate(conflicts)) {
+        const existingFileName = conflicts[0].existingFileName;
+        const fileTags = await readTagsFromLocalMp3Path(tracksDir, existingFileName);
+        choice = {
+          action: "identical",
+          existingFileName,
+          proposedTagsEdited: mergeWarnungForDisplay({ ...proposedTags }),
+          existingFileTagsEdited: mergeWarnungForDisplay({ ...fileTags }),
+        };
+      } else {
+        const candidateTagsByPath: Record<string, AudioTags> = {};
+        for (const c of conflicts) {
+          candidateTagsByPath[c.existingFileName] = await readTagsFromLocalMp3Path(
+            tracksDir,
+            c.existingFileName
+          );
+        }
+        choice = await onDuplicate({
+          playlistTitle: row.title,
+          proposedFileName,
+          playlistIndex: index,
+          candidates: conflicts,
+          proposedTags,
+          candidateTagsByPath,
+        });
       }
-      const choice = await onDuplicate({
-        playlistTitle: row.title,
-        proposedFileName,
-        playlistIndex: index,
-        candidates: conflicts,
-        proposedTags,
-        candidateTagsByPath,
-      });
 
       const propMerged = mergeWarnungForDisplay(choice.proposedTagsEdited);
       duplicateProposedTagsByIndex[index] = propMerged;
@@ -536,18 +560,30 @@ export async function exportFakeTracksToSharedStorage(
 
     if (conflicts.length > 0) {
       const proposedTags: AudioTags = getTagsForIndex?.(index) ? { ...getTagsForIndex(index)! } : {};
-      const candidateTagsByPath: Record<string, AudioTags> = {};
-      for (const c of conflicts) {
-        candidateTagsByPath[c.existingFileName] = await readTagsFromSharedMp3Path(c.existingFileName);
+      let choice: DuplicateChoice;
+      if (isSingleExactFilenameDuplicate(conflicts)) {
+        const existingFileName = conflicts[0].existingFileName;
+        const fileTags = await readTagsFromSharedMp3Path(existingFileName);
+        choice = {
+          action: "identical",
+          existingFileName,
+          proposedTagsEdited: mergeWarnungForDisplay({ ...proposedTags }),
+          existingFileTagsEdited: mergeWarnungForDisplay({ ...fileTags }),
+        };
+      } else {
+        const candidateTagsByPath: Record<string, AudioTags> = {};
+        for (const c of conflicts) {
+          candidateTagsByPath[c.existingFileName] = await readTagsFromSharedMp3Path(c.existingFileName);
+        }
+        choice = await onDuplicate({
+          playlistTitle: row.title,
+          proposedFileName,
+          playlistIndex: index,
+          candidates: conflicts,
+          proposedTags,
+          candidateTagsByPath,
+        });
       }
-      const choice = await onDuplicate({
-        playlistTitle: row.title,
-        proposedFileName,
-        playlistIndex: index,
-        candidates: conflicts,
-        proposedTags,
-        candidateTagsByPath,
-      });
 
       const propMerged = mergeWarnungForDisplay(choice.proposedTagsEdited);
       duplicateProposedTagsByIndex[index] = propMerged;

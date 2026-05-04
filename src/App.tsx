@@ -502,6 +502,71 @@ function splitPathForDupModal(raw: string): { dir: string; base: string } {
   return { dir: t.slice(0, i + 1), base: t.slice(i + 1) };
 }
 
+/** Zeichen-Indizes in `a`, die zur LCS mit `b` gehören (Vergleich case-insensitive). */
+function dupFilenameLcsIndicesInA(a: string, b: string): Set<number> {
+  const s1 = [...a.toLowerCase()];
+  const s2 = [...b.toLowerCase()];
+  const n = s1.length;
+  const m = s2.length;
+  if (n === 0 || m === 0) return new Set();
+  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      dp[i][j] =
+        s1[i - 1] === s2[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const inLcs = new Set<number>();
+  let i = n;
+  let j = m;
+  while (i > 0 && j > 0) {
+    if (s1[i - 1] === s2[j - 1]) {
+      inLcs.add(i - 1);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return inLcs;
+}
+
+function DupModalComparedFilename({ text, other }: { text: string; other: string }) {
+  if (text.toLowerCase() === other.toLowerCase()) {
+    return <span className="modal-dup-filename modal-dup-filename--full-match">{text}</span>;
+  }
+  const matchIdx = dupFilenameLcsIndicesInA(text, other);
+  const segments: ReactNode[] = [];
+  let buf = "";
+  let bufMatch: boolean | null = null;
+  let partKey = 0;
+  const flush = () => {
+    if (!buf) return;
+    const cls = bufMatch
+      ? "modal-dup-filename--part-match"
+      : "modal-dup-filename--part-rest";
+    segments.push(
+      <span key={partKey++} className={cls}>
+        {buf}
+      </span>
+    );
+    buf = "";
+  };
+  for (let k = 0; k < text.length; k++) {
+    const isM = matchIdx.has(k);
+    if (bufMatch === null) bufMatch = isM;
+    if (isM !== bufMatch) {
+      flush();
+      bufMatch = isM;
+    }
+    buf += text[k];
+  }
+  flush();
+  return <span className="modal-dup-filename modal-dup-filename--partial-wrap">{segments}</span>;
+}
+
 function dupModalNorm(s: unknown): string {
   return typeof s === "string" ? s.trim() : "";
 }
@@ -6455,7 +6520,17 @@ Oliver`,
                         >
                           —
                         </span>
-                        <span className="modal-dup-filename">{dupModal.proposedFileName}</span>
+                        {dupModalMultiHits ? (
+                          <span className="modal-dup-filename">{dupModal.proposedFileName}</span>
+                        ) : (
+                          <DupModalComparedFilename
+                            text={dupModal.proposedFileName}
+                            other={
+                              splitPathForDupModal(dupModal.candidates[0].existingFileName).base ||
+                              basenamePath(dupModal.candidates[0].existingFileName)
+                            }
+                          />
+                        )}
                       </div>
                     </div>
                     <div className="modal-dup-cell modal-dup-cell--action">
@@ -6505,6 +6580,15 @@ Oliver`,
                       </p>
                       <div className="modal-dup-grid modal-dup-grid--inline">
                         <div className="modal-dup-pathfile-col">
+                          {dupModalMultiHits && (
+                            <div className="modal-dup-neu-compare-line">
+                              <span className="modal-dup-neu-compare-label">Neu:</span>
+                              <DupModalComparedFilename
+                                text={dupModal.proposedFileName}
+                                other={sp.base || basenamePath(c.existingFileName)}
+                              />
+                            </div>
+                          )}
                           <div className="modal-dup-path-hit-line">
                             {dupModalMultiHits && (
                               <input
@@ -6529,9 +6613,10 @@ Oliver`,
                               >
                                 {sp.dir.trim() ? sp.dir : "—"}
                               </span>
-                              <span className="modal-dup-filename">
-                                {sp.base || basenamePath(c.existingFileName)}
-                              </span>
+                              <DupModalComparedFilename
+                                text={sp.base || basenamePath(c.existingFileName)}
+                                other={dupModal.proposedFileName}
+                              />
                             </div>
                           </div>
                         </div>
