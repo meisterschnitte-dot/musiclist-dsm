@@ -1,3 +1,5 @@
+import { labelcodeWithLcPrefix } from "../blankframeSearch";
+
 /**
  * Liest aus einer MP3 Roh-Texte aus ID3v2, ohne die ID3v2.3-Regel
  * „an `/` splitten“ (music-metadata `FrameParser.splitValue`).
@@ -15,13 +17,20 @@ export type Id3RawPreferredFields = Partial<
   >
 >;
 
-/** TXXX-Beschreibungen wie in {@link ./embedId3.ts}. */
+/**
+ * TXXX-Beschreibungen: kanonisch wie {@link ./embedId3.ts} plus gängige Fremd-Tools
+ * (z. B. „Publisher“ / „GVL Rights“ statt „Hersteller“ / „Rechterückruf“).
+ * „Writer“ → Komponist (wie beim Referenz-Fremdtagging).
+ */
 const TXXX_DESCRIPTION_TO_KEY: Record<string, keyof Id3RawPreferredFields> = {
   Hersteller: "hersteller",
+  Publisher: "hersteller",
   ISRC: "isrc",
   Labelcode: "labelcode",
   Label: "label",
+  Writer: "composer",
   "Rechterückruf": "gvlRechte",
+  "GVL Rights": "gvlRechte",
 };
 
 function uint32Synchsafe(buf: Uint8Array, off: number): number {
@@ -244,11 +253,13 @@ function sliceFramePayload(
 }
 
 /**
- * Ein Durchlauf über den ID3v2-Tag am Dateianfang: TCOM, TPE1, TXXX (siehe embedId3)
- * mit vollständigen Strings ohne `/`-Split durch die Bibliothek.
+ * Ein Durchlauf über den ID3v2-Tag am Dateianfang: TCOM/TPE1, TOLY („Writer“-Komponisten
+ * beim Referenz-Fremdtagging), TXXX mit vollständigen Strings ohne `/`-Split durch die Bibliothek.
  */
 export function readId3RawPreferredTextFields(u8: Uint8Array): Id3RawPreferredFields {
   const out: Id3RawPreferredFields = {};
+  /** Mehrfache TOLY-Frames eines Fremdsystems („Writer“-Spalte in Tag-Apps). */
+  const tolyWriterParts: string[] = [];
   if (u8.length < ID3_HEADER_LEN) return out;
 
   const id = String.fromCharCode(u8[0]!, u8[1]!, u8[2]!);
@@ -296,6 +307,12 @@ export function readId3RawPreferredTextFields(u8: Uint8Array): Id3RawPreferredFi
       continue;
     }
 
+    if (major >= 3 && idNorm === "TOLY") {
+      const tLy = decodeId3TextInformationFrame(payload)?.trim();
+      if (tLy) tolyWriterParts.push(tLy);
+      continue;
+    }
+
     const text = decodeId3TextInformationFrame(payload);
     if (!text) continue;
 
@@ -305,8 +322,155 @@ export function readId3RawPreferredTextFields(u8: Uint8Array): Id3RawPreferredFi
     } else {
       if (idNorm === "TCOM" && out.composer === undefined) out.composer = text;
       if (idNorm === "TPE1" && out.artist === undefined) out.artist = text;
+      /** Standard-ID3 „Publisher“ (oft statt TXXX „Publisher“ / „Hersteller“). */
+      if (idNorm === "TPUB" && out.hersteller === undefined) out.hersteller = text;
+      /** Fremdsystem „LACO“ = Labelcode (z. B. LC95281 → LC 95281). */
+      if (idNorm === "LACO" && out.labelcode === undefined) {
+        const lc = labelcodeWithLcPrefix(text.trim());
+        if (lc) out.labelcode = lc;
+      }
     }
   }
 
+  /** Mehrere TOLY („Writer“) setzen zusammen das Komponistenfeld (ersetzt einzelnes TCOM, falls gesetzt). */
+  if (tolyWriterParts.length > 0) {
+    out.composer = tolyWriterParts.join(", ");
+  }
+
+  if (out.labelcode?.trim()) {
+    const n = labelcodeWithLcPrefix(out.labelcode.trim());
+    if (n) out.labelcode = n;
+  }
+
   return out;
+}
+
+const HEX_PREVIEW_MAX = 64;
+
+function hexPreviewBytes(u8: Uint8Array, maxBytes = HEX_PREVIEW_MAX): string {
+  const n = Math.min(u8.length, maxBytes);
+  const parts: string[] = [];
+  for (let i = 0; i < n; i++) parts.push(u8[i]!.toString(16).padStart(2, "0"));
+  let s = parts.join(" ");
+  if (u8.length > maxBytes) s += ` … (+${u8.length - maxBytes} Bytes)`;
+  return s;
+}
+
+/**
+ * Zeilenweise Auflistung aller ID3v2-Frames am Dateianfang (Diagnose / MP3-Analyse).
+ * Komprimierte oder verschlüsselte Frames werden nur mit Roh-Hex angedeutet.
+ */
+export function buildRawId3v2FrameInspectionText(u8: Uint8Array): string {
+  const lines: string[] = [];
+  if (u8.length < ID3_HEADER_LEN) {
+    return "Kein ID3v2-Kopfbereich (Datei zu kurz).";
+  }
+
+  const sig = String.fromCharCode(u8[0]!, u8[1]!, u8[2]!);
+  if (sig !== "ID3") {
+    return "Keine ID3v2-Signatur am Dateianfang (kein auswertbarer ID3-Block dort).";
+  }
+
+  const major = u8[3]!;
+  if (major !== 2 && major !== 3 && major !== 4) {
+    return `ID3-Version nicht unterstützt (major=${major}).`;
+  }
+
+  const tagBodySize = uint32Synchsafe(u8, 6);
+  const bodyStart = ID3_HEADER_LEN;
+  const bodyEnd = Math.min(u8.length, bodyStart + tagBodySize);
+  const headerFlags = u8[5]!;
+  lines.push(
+    `ID3v2.${major}  deklarierte Tag-Größe: ${tagBodySize} Bytes  Header-Flags: 0x${headerFlags.toString(16)}`,
+    ""
+  );
+
+  let off = bodyStart;
+  const ext = (u8[5]! & 0x40) !== 0;
+  if (ext) {
+    if (off + 4 > bodyEnd) {
+      lines.push("ID3: Extended header angekündigt, aber unvollständig.");
+      return lines.join("\n");
+    }
+    const extSize = major === 4 ? uint32Synchsafe(u8, off) : readUInt32BE(u8, off);
+    if (extSize < 4 || off + extSize > bodyEnd) {
+      lines.push("ID3: Extended header ungültig.");
+      return lines.join("\n");
+    }
+    off += extSize;
+  }
+
+  const fhLen = getFrameHeaderSize(major);
+  let frameIndex = 0;
+
+  while (off + fhLen <= bodyEnd) {
+    const fh = readFrameHeader(u8, off, major);
+    if (!fh) break;
+    if (fh.id === "\0\0\0" || (major >= 3 && fh.id === "\0\0\0\0")) break;
+    if (fh.length < 0 || off + fhLen + fh.length > bodyEnd) break;
+
+    off += fhLen;
+    const rawPayload = u8.subarray(off, off + fh.length);
+    off += fh.length;
+
+    frameIndex++;
+    const idNorm = fh.id.replace(/\0/g, "").trim();
+    const fmt =
+      fh.major >= 3 && fh.flags
+        ? ` flags[unsync=${fh.flags.format.unsynchronisation}, compr=${fh.flags.format.compression}, enc=${fh.flags.format.encryption}, dli=${fh.flags.format.data_length_indicator}]`
+        : "";
+    lines.push(`--- Frame #${frameIndex}  ${idNorm}  Länge=${fh.length}${fmt} ---`);
+
+    const payload = sliceFramePayload(rawPayload, fh);
+    if (payload === undefined) {
+      lines.push(
+        "  [Payload nicht lesbar: komprimiert oder verschlüsselt — nur Rohdaten-Hex]",
+        `  ${hexPreviewBytes(rawPayload, 96)}`
+      );
+      continue;
+    }
+    if (payload.length === 0) {
+      lines.push("  (leeres Payload)");
+      continue;
+    }
+
+    if (major >= 3 && idNorm === "TXXX") {
+      const txxx = decodeTxxxFrameRaw(payload);
+      if (!txxx) {
+        lines.push("  [TXXX Dekodierung fehlgeschlagen]", `  ${hexPreviewBytes(payload)}`);
+      } else {
+        const mapKey = TXXX_DESCRIPTION_TO_KEY[txxx.description];
+        lines.push(
+          `  TXXX-Beschreibung: ${JSON.stringify(txxx.description)}`,
+          `  TXXX-Wert: ${JSON.stringify(txxx.value)}`,
+          mapKey
+            ? `  → App-Zuordnung: ${String(mapKey)}`
+            : "  → App-Zuordnung: (keine feste Zuordnung)"
+        );
+      }
+      continue;
+    }
+
+    const asText = decodeId3TextInformationFrame(payload);
+    if (asText !== undefined) {
+      lines.push(`  Text/Dekodiert: ${JSON.stringify(asText)}`);
+      const human: Record<string, string> = {
+        TCOM: "Komponist (TCOM)",
+        TPE1: "Interpret (TPE1)",
+        TPUB: "Publisher / Verlag (TPUB)",
+        TIT2: "Titel (TIT2)",
+        TALB: "Album (TALB)",
+        TOLY: "TOLY (oft „Writer“ / Komponist im Fremdtag-System)",
+        COMM: "Kommentar (COMM)",
+        LACO: "Labelcode (Fremd-Frame) → Anzeige wie „LC …“ (z. B. LC95281 → LC 95281)",
+      };
+      const hint = human[idNorm];
+      if (hint) lines.push(`  Bedeutung (grob): ${hint}`);
+    } else {
+      lines.push(`  Binär oder nicht als Text dekodierbar (${payload.length} Bytes)`, `  ${hexPreviewBytes(payload)}`);
+    }
+  }
+
+  if (frameIndex === 0) lines.push("(Keine Frames gefunden oder Tag-Body leer.)");
+  return lines.join("\n");
 }

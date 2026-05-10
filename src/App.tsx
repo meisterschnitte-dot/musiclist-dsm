@@ -24,7 +24,13 @@ import {
   tagCellText,
   type AudioTags,
 } from "./audio/audioTags";
+import { embedId3InMp3Blob } from "./audio/embedId3";
+import {
+  buildMp3InspectionReportText,
+  suggestedMp3InspectionDownloadBaseName,
+} from "./audio/mp3InspectionDump";
 import { readAudioTagsFromBlob } from "./audio/readId3Tags";
+import { enrichTagsFromGvlByLabelcode } from "./audio/enrichTagsFromGvlLookup";
 import { EdlLibraryPanel, type LibraryDeleteInfo } from "./components/EdlLibraryPanel";
 import { MediaPlayerDock } from "./components/MediaPlayerDock";
 import { MenuBar } from "./components/MenuBar";
@@ -477,6 +483,11 @@ function getOrCreateSessionSyncClientId(): string {
 
 type ImportOverlayState = { label: string; progress: number };
 
+function mp3ImportProgressPercent(done: number, total: number): number {
+  if (total <= 0) return 0;
+  return Math.round((done / total) * 100);
+}
+
 /** Erstimport (Datei/Menü/Drop) vs. erneutes Öffnen aus dem EDL- & Playlist Browser */
 type EdlImportKind = "new" | "fromLibrary";
 
@@ -907,6 +918,15 @@ export default function App() {
   const [mp3RecreateBasenameConfirmPaths, setMp3RecreateBasenameConfirmPaths] = useState<
     string[] | null
   >(null);
+  const mp3ImportFileInputRef = useRef<HTMLInputElement | null>(null);
+  const mp3InspectFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importMp3Busy, setImportMp3Busy] = useState(false);
+  /** Fortschritt Mehrfach-MP3-Import (Overlay); `null` wenn kein Import aktiv. */
+  const [mp3ImportProgress, setMp3ImportProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [mp3InspectBusy, setMp3InspectBusy] = useState(false);
   const [newMp3DialogOpen, setNewMp3DialogOpen] = useState(false);
   const [newMp3FileNameDraft, setNewMp3FileNameDraft] = useState("");
   const [newMp3Creating, setNewMp3Creating] = useState(false);
@@ -2456,6 +2476,7 @@ export default function App() {
 
   const confirmCreateNewMp3 = useCallback(async () => {
     setNewMp3Error(null);
+    if (importMp3Busy || mp3InspectBusy) return;
     if (!sessionUserId || !isAdmin) {
       setNewMp3Error("Nur Administratoren können neue MP3-Dateien anlegen.");
       return;
@@ -2509,10 +2530,204 @@ export default function App() {
   }, [
     sessionUserId,
     isAdmin,
+    importMp3Busy,
+    mp3InspectBusy,
     newMp3FileNameDraft,
     musicDbFileNames,
     openFileTags,
   ]);
+
+  /** MP3 von der Festplatte: Platzhalter-MP3 wie „Neue MP3“, Dateiname + ID3 vom Original (wenn lesbar). Mehrere Dateien nacheinander. */
+  const onMp3DiskImportChosen = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const input = e.currentTarget;
+      const picked = Array.from(input.files ?? []);
+      input.value = "";
+      setError(null);
+      setInfoMessage(null);
+      if (!picked.length) return;
+      if (newMp3Creating || importMp3Busy || mp3InspectBusy) return;
+      if (!sessionUserId || !isAdmin) {
+        setError("Nur Administratoren können MP3-Dateien importieren.");
+        return;
+      }
+
+      const files = picked.filter((f) => basenamePath(f.name).toLowerCase().endsWith(".mp3"));
+      if (!files.length) {
+        setError("Bitte nur MP3-Dateien auswählen (.mp3).");
+        return;
+      }
+
+      const skippedNonMp3 = picked.length - files.length;
+      const gvlDb = gvlLabelDb ?? loadGvlLabelDb();
+      const occupiedPaths = new Set(musicDbFileNames.map((p) => p.toLowerCase()));
+      const failures: string[] = [];
+      let importedCount = 0;
+      const importedRels: string[] = [];
+      setMp3ImportProgress({ done: 0, total: files.length });
+
+      setImportMp3Busy(true);
+      try {
+        for (const file of files) {
+          const leaf = basenamePath(file.name);
+          const normalized = normalizeUserInputToRelativeMp3Path(leaf);
+          if (!normalized) {
+            failures.push(`${leaf}: Dateiname nicht verwendbar`);
+            continue;
+          }
+          const rel = ensureUnderSonstigeTracksRelativePath(normalized);
+          if (!rel || !isSafeTracksRelativePath(rel)) {
+            failures.push(`${leaf}: ungültiger Zielpfad`);
+            continue;
+          }
+          const relKey = rel.toLowerCase();
+          if (occupiedPaths.has(relKey)) {
+            failures.push(`${leaf}: Name schon vergeben (${rel})`);
+            continue;
+          }
+
+          let exists = false;
+          try {
+            exists = await apiSharedTracksExists(rel);
+          } catch (err) {
+            failures.push(`${leaf}: ${err instanceof Error ? err.message : String(err)}`);
+            continue;
+          }
+          if (exists) {
+            failures.push(`${leaf}: Datei existiert schon auf dem Server`);
+            continue;
+          }
+
+          let sourceTags: AudioTags = {};
+          try {
+            sourceTags = mergeWarnungForDisplay(await readAudioTagsFromBlob(file));
+            sourceTags = enrichTagsFromGvlByLabelcode(sourceTags, gvlDb);
+          } catch {
+            sourceTags = {};
+          }
+
+          let blob: Blob = createFakeMp3Blob();
+          if (hasAnyAudioTagValue(sourceTags)) {
+            try {
+              blob = await embedId3InMp3Blob(blob, sourceTags);
+            } catch {
+              blob = createFakeMp3Blob();
+            }
+          }
+
+          try {
+            const buf = await blob.arrayBuffer();
+            await apiSharedTracksWriteBinary(rel, buf);
+            const state = await apiSharedMusicDbRegister([rel]);
+            setMusicDbFileNames(state.paths);
+            setMusicDbMetadata(state.metadata);
+            const baseTags = defaultTagsFromPlaylistTitle(rel);
+            const key = fileTagKey(rel);
+            const overlay = overlayFromForm(baseTags, sourceTags);
+            setTagStore((prev) => {
+              const next = { ...prev };
+              if (Object.keys(overlay).length === 0) delete next[key];
+              else next[key] = overlay;
+              if (playlist) {
+                for (const r of playlist) {
+                  if (r.linkedTrackFileName === rel) {
+                    delete next[playlistTagKey(r.id)];
+                  }
+                }
+              }
+              persistTagStore(next);
+              return next;
+            });
+            occupiedPaths.add(relKey);
+            importedCount += 1;
+            importedRels.push(rel);
+            setMp3ImportProgress({ done: importedCount, total: files.length });
+          } catch (err) {
+            failures.push(`${leaf}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        const infoParts: string[] = [];
+        if (skippedNonMp3 > 0) {
+          infoParts.push(
+            `${skippedNonMp3} ausgewählte Datei(en) ohne .mp3-Endung wurden übersprungen.`
+          );
+        }
+        if (files.length > 1) {
+          const extra = failures.length ? ` (${failures.length} mit Fehler)` : "";
+          infoParts.push(`${importedCount} von ${files.length} MP3 importiert.${extra}`);
+        }
+        setInfoMessage(infoParts.length ? infoParts.join(" ") : null);
+
+        const firstImported = importedRels[0];
+        if (firstImported) {
+          setHighlightMp3Name(importedRels[importedRels.length - 1]!);
+          window.setTimeout(() => setHighlightMp3Name(null), 2500);
+        }
+
+        if (failures.length) {
+          const maxShown = 8;
+          const lines = failures.slice(0, maxShown);
+          const more = failures.length > maxShown ? `\n… und ${failures.length - maxShown} weitere.` : "";
+          setError(lines.join("\n") + more);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setMp3ImportProgress(null);
+        setImportMp3Busy(false);
+      }
+    },
+    [sessionUserId, isAdmin, musicDbFileNames, newMp3Creating, importMp3Busy, mp3InspectBusy, gvlLabelDb, playlist, persistTagStore]
+  );
+
+  /** Lokale MP3-Analyse: Textbericht als Download (embedded Tags / Roh-ID3). */
+  const onMp3InspectionFileChosen = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const input = e.currentTarget;
+      const file = input.files?.[0];
+      input.value = "";
+      setError(null);
+      if (!file) return;
+      if (!sessionUserId || !isAdmin) {
+        setError("Nur Administratoren können die MP3-Analyse nutzen.");
+        return;
+      }
+      if (newMp3Creating || importMp3Busy || mp3InspectBusy) return;
+      if (!basenamePath(file.name).toLowerCase().endsWith(".mp3")) {
+        setError("Bitte eine MP3-Datei wählen (.mp3).");
+        return;
+      }
+
+      setMp3InspectBusy(true);
+      try {
+        const report = await buildMp3InspectionReportText(file, file.name);
+        const dlBlob = new Blob([report], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(dlBlob);
+        const base = suggestedMp3InspectionDownloadBaseName(file.name);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${base}-mp3-analyse.txt`;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setInfoMessage("MP3-Analyse wurde als Textdatei heruntergeladen.");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setMp3InspectBusy(false);
+      }
+    },
+    [
+      sessionUserId,
+      isAdmin,
+      newMp3Creating,
+      importMp3Busy,
+      mp3InspectBusy,
+    ]
+  );
 
   const openFileTagsMulti = useCallback((fileNames: string[]) => {
     const uniq = [...new Set(fileNames)];
@@ -5356,6 +5571,25 @@ Oliver`,
                   )}
                 </div>
                 <div className="panel-head-edl-actions">
+                  <input
+                    ref={mp3ImportFileInputRef}
+                    type="file"
+                    multiple
+                    accept=".mp3,audio/mpeg,audio/mp3"
+                    className="mp3-disk-import-input"
+                    aria-hidden
+                    tabIndex={-1}
+                    onChange={onMp3DiskImportChosen}
+                  />
+                  <input
+                    ref={mp3InspectFileInputRef}
+                    type="file"
+                    accept=".mp3,audio/mpeg,audio/mp3"
+                    className="mp3-disk-import-input"
+                    aria-hidden
+                    tabIndex={-1}
+                    onChange={onMp3InspectionFileChosen}
+                  />
                   <div className="menu panel-mp3-tools-menu" ref={mp3DbToolsMenuRef}>
                     <button
                       type="button"
@@ -5404,7 +5638,7 @@ Oliver`,
                             type="button"
                             className="menu-item menu-item--border"
                             role="menuitem"
-                            disabled={newMp3Creating || mp3RecreateBusy}
+                            disabled={newMp3Creating || mp3RecreateBusy || importMp3Busy || mp3InspectBusy}
                             title="Neue Platzhalter-MP3 auf dem Server anlegen und Tags bearbeiten"
                             onClick={() => {
                               setMp3DbToolsMenuOpen(false);
@@ -5416,13 +5650,56 @@ Oliver`,
                             Neue MP3 erstellen …
                           </button>
                         )}
+                        {sessionUserId && isAdmin && (
+                          <button
+                            type="button"
+                            className="menu-item"
+                            role="menuitem"
+                            disabled={newMp3Creating || mp3RecreateBusy || importMp3Busy || mp3InspectBusy}
+                            title={
+                              "Mehrere MP3-Dateien möglich (nacheinander). Platzhalter-MP3 wie bei „Neue MP3 erstellen“. " +
+                              "Audiodaten werden nicht kopiert; der Dateiname wird unter " +
+                              SONSTIGE_TRACKS_REL_FOLDER +
+                              "/ verwendet (sanitisiert). ID3-Tags vom gewählten File werden übernommen, wenn lesbar."
+                            }
+                            onClick={() => {
+                              setMp3DbToolsMenuOpen(false);
+                              setError(null);
+                              mp3ImportFileInputRef.current?.click();
+                            }}
+                          >
+                            {importMp3Busy ? "Import läuft …" : "MP3 importieren …"}
+                          </button>
+                        )}
+                        {sessionUserId && isAdmin && (
+                          <button
+                            type="button"
+                            className="menu-item menu-item--border"
+                            role="menuitem"
+                            disabled={newMp3Creating || mp3RecreateBusy || importMp3Busy || mp3InspectBusy}
+                            title="Lokale MP3 auswählen: eingebettete Tags (music-metadata + Roh-ID3) als .txt herunterladen — nur Analyse, keine Server-Änderung."
+                            onClick={() => {
+                              setMp3DbToolsMenuOpen(false);
+                              setError(null);
+                              mp3InspectFileInputRef.current?.click();
+                            }}
+                          >
+                            {mp3InspectBusy ? "Analyse läuft …" : "MP3-Analyse …"}
+                          </button>
+                        )}
                         {mp3KnownFromPlaylist.length > 0 && (
                           <>
                             <button
                               type="button"
                               className="menu-item menu-item--border"
                               role="menuitem"
-                              disabled={!sessionUserId || musicDbCleanupBusy || mp3RecreateBusy}
+                              disabled={
+                                !sessionUserId ||
+                                musicDbCleanupBusy ||
+                                mp3RecreateBusy ||
+                                importMp3Busy ||
+                                mp3InspectBusy
+                              }
                               title={
                                 !sessionUserId
                                   ? "Anmeldung erforderlich."
@@ -5439,7 +5716,13 @@ Oliver`,
                               type="button"
                               className="menu-item"
                               role="menuitem"
-                              disabled={!sessionUserId || musicDbCleanupBusy || mp3RecreateBusy}
+                              disabled={
+                                !sessionUserId ||
+                                musicDbCleanupBusy ||
+                                mp3RecreateBusy ||
+                                importMp3Busy ||
+                                mp3InspectBusy
+                              }
                               title={
                                 !sessionUserId
                                   ? "Anmeldung erforderlich."
@@ -5456,7 +5739,7 @@ Oliver`,
                               type="button"
                               className="menu-item menu-item--border"
                               role="menuitem"
-                              disabled={musicDbCleanupBusy || mp3RecreateBusy}
+                              disabled={musicDbCleanupBusy || mp3RecreateBusy || importMp3Busy || mp3InspectBusy}
                               title="Ausgewählte fehlende Einträge: Platzhalter-MP3 mit Tags auf dem Server am gespeicherten Pfad anlegen."
                               onClick={() => {
                                 setMp3DbToolsMenuOpen(false);
@@ -6088,7 +6371,7 @@ Oliver`,
           aria-modal="true"
           aria-labelledby="new-mp3-dialog-title"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !newMp3Creating) {
+            if (e.target === e.currentTarget && !newMp3Creating && !importMp3Busy && !mp3InspectBusy) {
               setNewMp3DialogOpen(false);
               setNewMp3Error(null);
             }
@@ -6117,10 +6400,10 @@ Oliver`,
               autoComplete="off"
               spellCheck={false}
               value={newMp3FileNameDraft}
-              disabled={newMp3Creating}
+              disabled={newMp3Creating || importMp3Busy || mp3InspectBusy}
               onChange={(e) => setNewMp3FileNameDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !newMp3Creating) {
+                if (e.key === "Enter" && !newMp3Creating && !importMp3Busy && !mp3InspectBusy) {
                   e.preventDefault();
                   void confirmCreateNewMp3();
                 }
@@ -6135,7 +6418,7 @@ Oliver`,
               <button
                 type="button"
                 className="btn-modal"
-                disabled={newMp3Creating}
+                disabled={newMp3Creating || importMp3Busy || mp3InspectBusy}
                 onClick={() => {
                   setNewMp3DialogOpen(false);
                   setNewMp3Error(null);
@@ -6146,7 +6429,7 @@ Oliver`,
               <button
                 type="button"
                 className="btn-modal primary"
-                disabled={newMp3Creating}
+                disabled={newMp3Creating || importMp3Busy || mp3InspectBusy}
                 onClick={() => void confirmCreateNewMp3()}
               >
                 {newMp3Creating ? "Wird angelegt …" : "OK"}
@@ -6685,7 +6968,7 @@ Oliver`,
         </div>
       )}
 
-      {importOverlay && (
+      {(importOverlay || mp3ImportProgress) && (
         <div
           className="import-progress-backdrop"
           role="dialog"
@@ -6695,12 +6978,37 @@ Oliver`,
         >
           <div className="import-progress-dialog">
             <p id="import-progress-title" className="import-progress-label">
-              {importOverlay.label}
+              {importOverlay?.label ??
+                (mp3ImportProgress
+                  ? `${mp3ImportProgress.done} von ${mp3ImportProgress.total} importiert`
+                  : "")}
             </p>
-            <div className="import-progress-track" role="progressbar" aria-valuenow={importOverlay.progress} aria-valuemin={0} aria-valuemax={100}>
+            <div
+              className="import-progress-track"
+              role="progressbar"
+              aria-valuenow={
+                importOverlay
+                  ? importOverlay.progress
+                  : mp3ImportProgressPercent(
+                      mp3ImportProgress?.done ?? 0,
+                      mp3ImportProgress?.total ?? 0
+                    )
+              }
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
               <div
                 className="import-progress-fill"
-                style={{ width: `${importOverlay.progress}%` }}
+                style={{
+                  width: `${
+                    importOverlay
+                      ? importOverlay.progress
+                      : mp3ImportProgressPercent(
+                          mp3ImportProgress?.done ?? 0,
+                          mp3ImportProgress?.total ?? 0
+                        )
+                  }%`,
+                }}
               />
             </div>
           </div>

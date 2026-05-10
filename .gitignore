@@ -4,6 +4,7 @@ dist
 .DS_Store
 data/
 data.pre-restore-*/
+tracks/
 .env
 .env.*
 !.env.example

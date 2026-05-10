@@ -5404,6 +5404,16 @@ tr:hover td {
   transition: width 0.18s ease-out;
 }
 
+.panel.panel-mp3 .mp3-disk-import-input {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /**
  * Musikdatenbank-Panel: Hamburg-Menü und Player-Rahmen.
  * Hohe Spezifität + zuletzt in der Datei, damit nichts anderes überschreibt.

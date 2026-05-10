@@ -1,4 +1,5 @@
 import type { IAudioMetadata } from "music-metadata";
+import { labelcodeWithLcPrefix } from "../blankframeSearch";
 import type { AudioTags } from "./audioTags";
 import { readId3RawPreferredTextFields } from "./readId3RawTextFrames";
 
@@ -10,13 +11,19 @@ import { readId3RawPreferredTextFields } from "./readId3RawTextFrames";
  * {@link readId3RawPreferredTextFields} liest Rohstrings und überschreibt diese Felder.
  */
 
-/** Entspricht den TXXX-Beschreibungen aus `embedId3.ts`. */
+/**
+ * Native-Tag-IDs von `music-metadata` für TXXX (Format `TXXX:<Description>`).
+ * Erweitert um Fremdbezeichnungen wie bei {@link readId3RawTextFrames}.
+ */
 const TXXX_ID_TO_KEY: Record<string, keyof AudioTags> = {
   "TXXX:ISRC": "isrc",
   "TXXX:Labelcode": "labelcode",
   "TXXX:Label": "label",
   "TXXX:Hersteller": "hersteller",
+  "TXXX:Publisher": "hersteller",
   "TXXX:Rechterückruf": "gvlRechte",
+  "TXXX:GVL Rights": "gvlRechte",
+  "TXXX:Writer": "composer",
 };
 
 function firstCommentText(metadata: IAudioMetadata): string | undefined {
@@ -58,7 +65,9 @@ function audioTagsFromMetadata(metadata: IAudioMetadata): AudioTags {
 
   for (const tags of Object.values(metadata.native)) {
     for (const tag of tags) {
-      const key = TXXX_ID_TO_KEY[tag.id];
+      const sid = typeof tag.id === "string" ? tag.id : String(tag.id);
+      const key: keyof AudioTags | undefined =
+        TXXX_ID_TO_KEY[sid] ?? (sid === "LACO" ? "labelcode" : undefined);
       if (!key) continue;
       const v = tag.value;
       if (typeof v === "string" && v.trim()) {
@@ -92,6 +101,10 @@ export async function readAudioTagsFromBlob(blob: Blob): Promise<AudioTags> {
     if (raw.label !== undefined) out.label = raw.label;
     if (raw.hersteller !== undefined) out.hersteller = raw.hersteller;
     if (raw.gvlRechte !== undefined) out.gvlRechte = raw.gvlRechte;
+    if (out.labelcode?.trim()) {
+      const lcNorm = labelcodeWithLcPrefix(out.labelcode.trim());
+      if (lcNorm) out.labelcode = lcNorm;
+    }
     return out;
   } catch {
     return {};
