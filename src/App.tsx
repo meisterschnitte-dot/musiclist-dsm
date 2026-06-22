@@ -59,6 +59,10 @@ import {
   sameLibraryPlaylistDocumentName,
   serializePlaylistLibraryFile,
 } from "./edl/playlistLibraryFile";
+import {
+  applyTagsByRowIdToTagStore,
+  buildTagsByRowIdForLibrarySave,
+} from "./edl/playlistLibraryTagPersistence";
 import { parseEdl } from "./edl/parseEdl";
 import { eventsToMergedPlaylist } from "./edl/mergePlaylist";
 import { netPlaylistTrackCount } from "./edl/netPlaylistTrackCount";
@@ -1701,16 +1705,22 @@ export default function App() {
         setPlaylist(parsed.playlist);
         setFileName(name);
         setEdlRawText(null);
-        if (parsed.tagsByRowId && Object.keys(parsed.tagsByRowId).length > 0) {
-          setTagStore((prev) => {
-            const next = { ...prev };
-            for (const [rowId, tags] of Object.entries(parsed.tagsByRowId!)) {
-              next[playlistTagKey(rowId)] = tags;
-            }
-            persistTagStore(next);
-            return next;
-          });
-        }
+        setTagStore((prev) => {
+          const next =
+            parsed.tagsByRowId && Object.keys(parsed.tagsByRowId).length > 0
+              ? applyTagsByRowIdToTagStore(parsed.playlist, parsed.tagsByRowId, prev)
+              : (() => {
+                  const cleared = { ...prev };
+                  for (const row of parsed.playlist) {
+                    if (row.linkedTrackFileName?.trim()) {
+                      delete cleared[playlistTagKey(row.id)];
+                    }
+                  }
+                  return cleared;
+                })();
+          persistTagStore(next);
+          return next;
+        });
         setImportOverlay({ label: "Fertig", progress: 100 });
         await new Promise((r) => setTimeout(r, 220));
         setImportOverlay(null);
@@ -1783,12 +1793,6 @@ export default function App() {
         for (const loc of listFiles) {
           const text = await edlLibraryAccess.readText(loc.parentSegments, loc.fileName);
           const parsed = parsePlaylistLibraryFile(text);
-          if (parsed.tagsByRowId) {
-            for (const [rowId, tags] of Object.entries(parsed.tagsByRowId)) {
-              const pk = playlistTagKey(rowId);
-              next[pk] = mergeAudioTags(next[pk] ?? {}, tags);
-            }
-          }
           for (const row of parsed.playlist) {
             const linked = row.linkedTrackFileName?.trim();
             if (!linked || !isMp3FileName(linked)) continue;
@@ -1818,6 +1822,30 @@ export default function App() {
       }
     },
     [sessionUserId, edlLibraryAccess, persistTagStore]
+  );
+
+  /** Aktuelle Tag-Anzeige in die geöffnete .list schreiben (nach Bearbeitung / Refresh). */
+  const persistOpenPlaylistLibraryFile = useCallback(
+    (pl: PlaylistEntry[] | null | undefined, store: TagStore) => {
+      if (!edlLibraryAccess || loadedLibraryFile?.kind !== "playlist" || !pl?.length) return;
+      const tagsByRowId = buildTagsByRowIdForLibrarySave(pl, store);
+      const payload = serializePlaylistLibraryFile({
+        v: 1,
+        displayTitle: edlTitle,
+        playlist: pl,
+        ...(Object.keys(tagsByRowId).length ? { tagsByRowId } : {}),
+        tracksLinkedAtIso: new Date().toISOString(),
+      });
+      void edlLibraryAccess
+        .writeText(loadedLibraryFile.parentSegments, loadedLibraryFile.fileName, payload)
+        .then(() => setEdlLibraryRefresh((k) => k + 1))
+        .catch(() => {
+          setError(
+            "Tags wurden lokal gespeichert, aber die .list-Datei konnte nicht aktualisiert werden."
+          );
+        });
+    },
+    [edlLibraryAccess, loadedLibraryFile, edlTitle]
   );
 
   /** Liest ID3 aus MP3-Dateien und übernimmt Tags in den Tag-Store (Listenanzeige). */
@@ -1877,6 +1905,7 @@ export default function App() {
           else next[key] = overlay;
         }
         persistTagStore(next);
+        persistOpenPlaylistLibraryFile(playlist, next);
         return next;
       });
       setImportOverlay({ label: "Fertig", progress: 100 });
@@ -1903,7 +1932,7 @@ export default function App() {
         setInfoMessage(parts.join(" "));
       }
     },
-    [sessionUserId, playlist, persistTagStore]
+    [sessionUserId, playlist, persistTagStore, persistOpenPlaylistLibraryFile]
   );
 
   const refreshTagsFromPlaylistSelection = useCallback(
@@ -2962,6 +2991,7 @@ export default function App() {
                 }
               }
               persistTagStore(next);
+              persistOpenPlaylistLibraryFile(playlist, next);
               return next;
             });
           } else if (tagModal.kind === "fileMulti") {
@@ -3018,6 +3048,7 @@ export default function App() {
                 }
               }
               persistTagStore(next);
+              persistOpenPlaylistLibraryFile(playlist, next);
               return next;
             });
           }
@@ -3072,6 +3103,7 @@ export default function App() {
             delete next[playlistTagKey(row.id)];
           }
           persistTagStore(next);
+          persistOpenPlaylistLibraryFile(playlist, next);
           return next;
         });
       } else if (tagModal.kind === "file") {
@@ -3114,13 +3146,14 @@ export default function App() {
             }
           }
           persistTagStore(next);
+          persistOpenPlaylistLibraryFile(playlist, next);
           return next;
         });
       }
       setTagModal(null);
       setGvlApplyToTag(null);
     },
-    [tagModal, playlist, sessionUserId, persistTagStore]
+    [tagModal, playlist, sessionUserId, persistTagStore, persistOpenPlaylistLibraryFile]
   );
 
   const onImportEdl = useCallback(() => {
