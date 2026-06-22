@@ -1820,6 +1820,112 @@ export default function App() {
     [sessionUserId, edlLibraryAccess, persistTagStore]
   );
 
+  /** Liest ID3 aus MP3-Dateien und übernimmt Tags in den Tag-Store (Listenanzeige). */
+  const refreshTagStoreFromMp3Paths = useCallback(
+    async (relativePaths: readonly string[]) => {
+      if (!sessionUserId) {
+        setError("Bitte anmelden.");
+        return;
+      }
+      const unique = [
+        ...new Set(
+          relativePaths
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0 && isMp3FileName(p))
+        ),
+      ];
+      if (unique.length === 0) {
+        setInfoMessage("Keine MP3-Dateien zum Aktualisieren.");
+        return;
+      }
+      setError(null);
+      setImportOverlay({ label: "Tags aus MP3-Dateien werden gelesen …", progress: 12 });
+      await yieldFrames();
+      type Pending = { key: string; overlay: AudioTags };
+      const pending: Pending[] = [];
+      const legacyPlaylistKeys = new Set<string>();
+      let ok = 0;
+      let fail = 0;
+      for (let i = 0; i < unique.length; i++) {
+        const linked = unique[i]!;
+        setImportOverlay({
+          label: `Tags aus MP3-Dateien werden gelesen … (${i + 1}/${unique.length})`,
+          progress: 12 + Math.round(((i + 1) / unique.length) * 78),
+        });
+        await yieldFrames();
+        try {
+          const buf = await apiSharedTracksReadBinary(linked);
+          const file = new File([buf], basenamePath(linked), { type: "audio/mpeg" });
+          const id3 = mergeWarnungForDisplay(await readAudioTagsFromBlob(file));
+          const base = defaultTagsFromPlaylistTitle(linked);
+          pending.push({ key: fileTagKey(linked), overlay: overlayFromForm(base, id3) });
+          for (const row of playlist ?? []) {
+            if (row.linkedTrackFileName?.trim() === linked) {
+              legacyPlaylistKeys.add(playlistTagKey(row.id));
+            }
+          }
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      setTagStore((prev) => {
+        const next = { ...prev };
+        for (const pk of legacyPlaylistKeys) delete next[pk];
+        for (const { key, overlay } of pending) {
+          if (Object.keys(overlay).length === 0) delete next[key];
+          else next[key] = overlay;
+        }
+        persistTagStore(next);
+        return next;
+      });
+      setImportOverlay({ label: "Fertig", progress: 100 });
+      await new Promise((r) => setTimeout(r, 180));
+      setImportOverlay(null);
+      const parts: string[] = [];
+      if (ok > 0) {
+        parts.push(
+          ok === 1
+            ? "Tags für 1 MP3 aus der Datei übernommen."
+            : `Tags für ${ok} MP3s aus den Dateien übernommen.`
+        );
+      }
+      if (fail > 0) {
+        parts.push(
+          fail === 1
+            ? "1 MP3-Datei konnte nicht gelesen werden."
+            : `${fail} MP3-Dateien konnten nicht gelesen werden.`
+        );
+      }
+      if (parts.length === 0) {
+        setInfoMessage("Keine Tags konnten aktualisiert werden.");
+      } else {
+        setInfoMessage(parts.join(" "));
+      }
+    },
+    [sessionUserId, playlist, persistTagStore]
+  );
+
+  const refreshTagsFromPlaylistSelection = useCallback(
+    async (indices: readonly number[]) => {
+      if (!playlist?.length) return;
+      const paths: string[] = [];
+      for (const i of indices) {
+        const linked = playlist[i]?.linkedTrackFileName?.trim();
+        if (linked && isMp3FileName(linked)) paths.push(linked);
+      }
+      await refreshTagStoreFromMp3Paths(paths);
+    },
+    [playlist, refreshTagStoreFromMp3Paths]
+  );
+
+  const refreshTagsFromMp3Selection = useCallback(
+    async (fileNames: readonly string[]) => {
+      await refreshTagStoreFromMp3Paths(fileNames);
+    },
+    [refreshTagStoreFromMp3Paths]
+  );
+
   const runGemaXlsImport = useCallback(
     async (
       buffer: ArrayBuffer,
@@ -4912,12 +5018,32 @@ Oliver`,
   const tagCtxMenuPos = tagsCtxMenu
     ? (() => {
         const w = 280;
-        let h = 44;
+        const itemH = 44;
+        let h = itemH;
         if (tagsCtxMenu.kind === "file") {
-          h = sessionUserId ? 204 : 152;
+          h += itemH; // Tags bearbeiten
+          if (sessionUserId) {
+            h += itemH; // Refresh Tags
+            h += itemH; // P7S1
+            h += itemH; // Pfad kopieren
+            if (isAdmin) h += itemH; // Löschen
+          } else {
+            h += itemH; // P7S1
+            h += itemH; // Pfad kopieren
+          }
         } else {
+          h += itemH; // Tags bearbeiten
+          const refreshCount = tagsCtxMenu.removeFromListIndices.filter((i) => {
+            const linked = playlist?.[i]?.linkedTrackFileName?.trim();
+            return linked && isMp3FileName(linked);
+          }).length;
+          if (sessionUserId && refreshCount > 0) h += itemH;
           const linked = playlist?.[tagsCtxMenu.index]?.linkedTrackFileName;
-          h = linked ? 204 : 96;
+          if (linked) {
+            h += itemH; // Zeige Track
+            h += itemH; // Pfad kopieren
+          }
+          h += itemH; // Aus Liste löschen
         }
         return clampCtxMenuPos(tagsCtxMenu.x, tagsCtxMenu.y, w, h);
       })()
@@ -6023,6 +6149,40 @@ Oliver`,
                   ? `Tags bearbeiten (${tagsCtxMenu.deleteTargets.length}) …`
                   : "Tags bearbeiten"}
             </button>
+            {sessionUserId &&
+              (tagsCtxMenu.kind === "file" ||
+                tagsCtxMenu.removeFromListIndices.some((i) => {
+                  const linked = playlist?.[i]?.linkedTrackFileName?.trim();
+                  return linked && isMp3FileName(linked);
+                })) && (
+                <button
+                  type="button"
+                  className="tags-ctx-menu-item tags-ctx-menu-item--border"
+                  role="menuitem"
+                  title="Songtitel und weitere Tags aus der MP3-Datei in die Liste übernehmen (ohne die Datei zu verändern)."
+                  onClick={() => {
+                    const m = tagsCtxMenu;
+                    setTagsCtxMenu(null);
+                    if (m?.kind === "playlist") {
+                      void refreshTagsFromPlaylistSelection(m.removeFromListIndices);
+                    } else if (m?.kind === "file") {
+                      void refreshTagsFromMp3Selection(m.deleteTargets);
+                    }
+                  }}
+                >
+                  {tagsCtxMenu.kind === "playlist"
+                    ? (() => {
+                        const n = tagsCtxMenu.removeFromListIndices.filter((i) => {
+                          const linked = playlist?.[i]?.linkedTrackFileName?.trim();
+                          return linked && isMp3FileName(linked);
+                        }).length;
+                        return n === 1 ? "Refresh Tags" : `Refresh Tags (${n}) …`;
+                      })()
+                    : tagsCtxMenu.deleteTargets.length === 1
+                      ? "Refresh Tags"
+                      : `Refresh Tags (${tagsCtxMenu.deleteTargets.length}) …`}
+                </button>
+              )}
             {tagsCtxMenu.kind === "playlist" &&
               playlist?.[tagsCtxMenu.index]?.linkedTrackFileName && (
                 <>
