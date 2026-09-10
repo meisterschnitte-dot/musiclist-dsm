@@ -72,6 +72,7 @@
   --app-ok-bg: #152a1f;
   --app-ok-border: #2a5c3e;
   --app-tag-border: #1a2a3a;
+  --app-tag-filename-stem: #7ec8f0;
   --app-muted-line: #9aa8b8;
   --app-chart-line: #a8b8c8;
   --app-chart-fill: #c8d8ec;
@@ -151,6 +152,7 @@ html[data-theme="light"] {
   --app-ok-bg: #d4e8d8;
   --app-ok-border: #7ab080;
   --app-tag-border: #9aa4b0;
+  --app-tag-filename-stem: #0284c7;
   --app-muted-line: #6a7484;
   --app-chart-line: #4a5868;
   --app-chart-fill: #c0d0e8;
@@ -3360,6 +3362,16 @@ body {
   overflow-wrap: anywhere;
 }
 
+.tag-filename-path,
+.tag-filename-ext {
+  color: var(--app-text-muted);
+}
+
+.tag-filename-stem {
+  color: var(--app-tag-filename-stem);
+  font-weight: 600;
+}
+
 .tag-filename-ctx-shortcut {
   font-size: 0.78rem;
   color: var(--app-text-dim);
@@ -3372,6 +3384,22 @@ body {
 
 .modal--transfer-list-confirm {
   max-width: min(28rem, 94vw);
+}
+
+.modal--set-duration {
+  max-width: min(26rem, 94vw);
+}
+
+.set-duration-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin: 0.75rem 0 0.35rem;
+}
+
+.set-duration-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.82rem;
 }
 
 .modal--gvl-sync {
@@ -4293,7 +4321,7 @@ body {
   background: var(--app-surface-input);
   color: var(--app-text);
   resize: vertical;
-  min-height: 4.5rem;
+  min-height: 6rem;
 }
 
 .tag-import-overwrite {

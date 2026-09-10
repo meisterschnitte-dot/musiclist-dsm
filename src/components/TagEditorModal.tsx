@@ -174,6 +174,23 @@ function defaultManualMusicDbFilterTerm(source: string | null | undefined): stri
   return basenamePath(raw.replace(/\\/g, "/"));
 }
 
+/** Pfad normal, Dateiname ohne .mp3/.wav in Hellblau (Anzeige im Tag-Dialog). */
+function splitTagEditorFilenameDisplay(source: string): {
+  dir: string;
+  stem: string;
+  ext: string;
+} {
+  const normalized = source.trim().replace(/\\/g, "/");
+  const lastSlash = normalized.lastIndexOf("/");
+  const dir = lastSlash >= 0 ? normalized.slice(0, lastSlash + 1) : "";
+  const base = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized;
+  const extMatch = base.match(/^(.+?)\.(mp3|wav)$/i);
+  if (extMatch) {
+    return { dir, stem: extMatch[1]!, ext: `.${extMatch[2]!.toLowerCase()}` };
+  }
+  return { dir, stem: base, ext: "" };
+}
+
 type Props = {
   open: boolean;
   heading: string;
@@ -778,7 +795,16 @@ export function TagEditorModal({
               onContextMenu={onFilenameContextMenu}
               title="Text mit der Maus markieren"
             >
-              {p7SearchSource.trim()}
+              {(() => {
+                const { dir, stem, ext } = splitTagEditorFilenameDisplay(p7SearchSource);
+                return (
+                  <>
+                    {dir ? <span className="tag-filename-path">{dir}</span> : null}
+                    <span className="tag-filename-stem">{stem}</span>
+                    {ext ? <span className="tag-filename-ext">{ext}</span> : null}
+                  </>
+                );
+              })()}
             </div>
           </div>
         ) : null}
@@ -796,7 +822,7 @@ export function TagEditorModal({
             placeholder={
               "TITEL …\nCD …\nJAHR …\n\nCézame z. B.:\nTitre :  A Part of Me = Songtitel\nLC :  10347 = Labelcode\n\nBlankframe z. B.:\nDystopia = Songtitel"
             }
-            rows={5}
+            rows={7}
             spellCheck={false}
             aria-label="Eingefügter Metadaten-Text (GEMA, Lens, Blankframe, …)"
           />

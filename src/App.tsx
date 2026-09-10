@@ -37,6 +37,7 @@ import { MediaPlayerDock } from "./components/MediaPlayerDock";
 import { MenuBar } from "./components/MenuBar";
 import { StoragePathsModal } from "./components/StoragePathsModal";
 import { SystemSettingsModal } from "./components/SystemSettingsModal";
+import { SetDurationModal } from "./components/SetDurationModal";
 import { TagEditorModal, type GvlApplyFromDbPayload } from "./components/TagEditorModal";
 import { ChangePasswordModal } from "./components/ChangePasswordModal";
 import { UserAuthScreen } from "./components/UserAuthScreen";
@@ -69,7 +70,12 @@ import {
 import { parseEdl } from "./edl/parseEdl";
 import { eventsToMergedPlaylist } from "./edl/mergePlaylist";
 import { netPlaylistTrackCount } from "./edl/netPlaylistTrackCount";
-import { DEFAULT_FPS, playlistDurationTimecode } from "./edl/timecode";
+import {
+  DEFAULT_FPS,
+  framesToTimecode,
+  normalizeFramesToDay,
+  playlistDurationTimecode,
+} from "./edl/timecode";
 import type { PlaylistEntry } from "./edl/types";
 import {
   collectTagStoreKeysForRemovedMusicPaths,
@@ -983,6 +989,8 @@ export default function App() {
   const [tagsCtxMenu, setTagsCtxMenu] = useState<TagsCtxMenuState>(null);
   /** Zwischenablage für Copy/Paste Tags in der EDL- & Playlist-Tabelle. */
   const [playlistTagsClipboard, setPlaylistTagsClipboard] = useState<AudioTags | null>(null);
+  /** Kontextmenü „Set Duration“: Zeilenindex in der Playlist. */
+  const [setDurationRowIndex, setSetDurationRowIndex] = useState<number | null>(null);
   /** Anteil der oberen Pane (EDL- & Playlist) an der Split-Höhe (Musikdatenbank = Rest). */
   const [splitTopFrac, setSplitTopFrac] = useState(0.5);
   const splitPanesRef = useRef<HTMLDivElement>(null);
@@ -2013,6 +2021,39 @@ export default function App() {
       persistTagStore,
       persistOpenPlaylistLibraryFile,
     ]
+  );
+
+  const saveSetDuration = useCallback(
+    (recInFrames: number, recOutFrames: number) => {
+      if (!playlist?.length || setDurationRowIndex == null) return;
+      const idx = setDurationRowIndex;
+      if (idx < 0 || idx >= playlist.length) return;
+      const inFr = normalizeFramesToDay(recInFrames, DEFAULT_FPS);
+      const outFr = normalizeFramesToDay(recOutFrames, DEFAULT_FPS);
+      if (outFr <= inFr) {
+        setError("TC-Out muss nach TC-In liegen.");
+        return;
+      }
+      const next = playlist.map((row, i) => {
+        if (i !== idx) return row;
+        return {
+          ...row,
+          recIn: framesToTimecode(inFr, DEFAULT_FPS),
+          recOut: framesToTimecode(outFr, DEFAULT_FPS),
+          recInFrames: inFr,
+          recOutFrames: outFr,
+        };
+      });
+      setPlaylist(next);
+      setTagStore((prev) => {
+        persistOpenPlaylistLibraryFile(next, prev);
+        return prev;
+      });
+      setSetDurationRowIndex(null);
+      setError(null);
+      setInfoMessage(`TC/Dauer für Zeile ${idx + 1} aktualisiert.`);
+    },
+    [playlist, setDurationRowIndex, persistOpenPlaylistLibraryFile]
   );
 
   const runGemaXlsImport = useCallback(
@@ -5127,6 +5168,7 @@ Oliver`,
         } else {
           h += itemH; // Tags bearbeiten
           if (!playlistAsCustomerExport) {
+            h += itemH; // Set Duration
             h += itemH; // Copy Tags
             h += itemH; // Paste Tags
           }
@@ -6272,6 +6314,20 @@ Oliver`,
                   type="button"
                   className="tags-ctx-menu-item tags-ctx-menu-item--border"
                   role="menuitem"
+                  title="Programm-TC In/Out und Dauer dieser Zeile bearbeiten."
+                  onClick={() => {
+                    const m = tagsCtxMenu;
+                    if (m?.kind !== "playlist") return;
+                    setTagsCtxMenu(null);
+                    setSetDurationRowIndex(m.index);
+                  }}
+                >
+                  Set Duration
+                </button>
+                <button
+                  type="button"
+                  className="tags-ctx-menu-item"
+                  role="menuitem"
                   title="Aktuelle Tag-Anzeige dieser Zeile für Paste Tags merken."
                   onClick={() => {
                     const m = tagsCtxMenu;
@@ -6434,6 +6490,17 @@ Oliver`,
           </div>
         </>
       )}
+
+      {setDurationRowIndex != null && playlist?.[setDurationRowIndex] ? (
+        <SetDurationModal
+          open
+          row={playlist[setDurationRowIndex]}
+          rowIndex={setDurationRowIndex}
+          fps={DEFAULT_FPS}
+          onClose={() => setSetDurationRowIndex(null)}
+          onSave={saveSetDuration}
+        />
+      ) : null}
 
       {tagModalLoadBusy && (
         <div

@@ -65,6 +65,39 @@ export function timecodeInputToFrames(raw: string, fps: number = DEFAULT_FPS): n
   return timecodeToFrames(t, fps);
 }
 
+/** Dauer als Timecode (Stunden dürfen 24 überschreiten). */
+export function durationTimecodeToFrames(tc: string, fps: number = DEFAULT_FPS): number {
+  const m = tc.trim().match(/^(\d+):(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) throw new Error(`Ungültige Dauer: ${tc}`);
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  const ss = Number(m[3]);
+  const ff = Number(m[4]);
+  const maxF = fps - 1;
+  if (hh < 0 || mm < 0 || mm > 59 || ss < 0 || ss > 59 || ff < 0 || ff > maxF) {
+    throw new Error(
+      `Ungültige Dauer (MM/SS 00–59, Frames 00–${String(maxF).padStart(2, "0")} bei ${fps} fps): ${tc}`
+    );
+  }
+  return (((hh * 60 + mm) * 60 + ss) * fps + ff) | 0;
+}
+
+/** Wie {@link timecodeInputToFrames}, für Dauer-Felder (kein 24h-Limit bei Stunden). */
+export function durationInputToFrames(raw: string, fps: number = DEFAULT_FPS): number {
+  const t = raw.trim();
+  if (!t) throw new Error("Leere Dauer");
+  const noSpace = t.replace(/\s/g, "");
+  if (/^\d+$/.test(noSpace)) {
+    if (noSpace.length > 8) {
+      throw new Error(`Zu viele Ziffern (max. 8): ${noSpace}`);
+    }
+    const padded = noSpace.padStart(8, "0");
+    const tc = `${padded.slice(0, 2)}:${padded.slice(2, 4)}:${padded.slice(4, 6)}:${padded.slice(6, 8)}`;
+    return durationTimecodeToFrames(tc, fps);
+  }
+  return durationTimecodeToFrames(t, fps);
+}
+
 /**
  * Programm-/Uhrzeit-Position: 24h-Zyklus (gleiche Uhrzeit wie EBU 25fps: Frames 00–24).
  * Für Zeitspannen (Dauer) stattdessen {@link framesToTimecodeDuration} verwenden.
