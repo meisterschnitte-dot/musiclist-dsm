@@ -167,6 +167,13 @@ type OnSaveTag = (
   meta?: { multi: true; touchedKeys: readonly string[] }
 ) => void | Promise<void>;
 
+/** Vorgabe für manuelle Musikdatenbank-Suche (Dateiname aus Playlist-/MP3-Bezug). */
+function defaultManualMusicDbFilterTerm(source: string | null | undefined): string {
+  const raw = source?.trim();
+  if (!raw) return "";
+  return basenamePath(raw.replace(/\\/g, "/"));
+}
+
 type Props = {
   open: boolean;
   heading: string;
@@ -248,7 +255,9 @@ export function TagEditorModal({
   const [manualAllPaths, setManualAllPaths] = useState<string[]>([]);
   const [manualPathsBusy, setManualPathsBusy] = useState(false);
   const [manualPathsErr, setManualPathsErr] = useState<string | null>(null);
-  const [manualSearchQuery, setManualSearchQuery] = useState("");
+  const [manualSearchQueryInput, setManualSearchQueryInput] = useState("");
+  /** Erst nach Klick auf „Suchen“ (oder Enter) — entlastet große Musikdatenbanken. */
+  const [manualSearchQueryActive, setManualSearchQueryActive] = useState("");
   const [manualSelectedPath, setManualSelectedPath] = useState<string | null>(null);
   const [manualAssignBusy, setManualAssignBusy] = useState(false);
 
@@ -311,10 +320,14 @@ export function TagEditorModal({
     };
   }, [manualSearchOpen, open]);
 
+  const runManualMusicDbSearch = useCallback(() => {
+    setManualSearchQueryActive(manualSearchQueryInput.trim());
+    setManualSelectedPath(null);
+  }, [manualSearchQueryInput]);
+
   const manualFilteredPaths = useMemo(() => {
-    const q = manualSearchQuery.trim().toLowerCase();
-    if (!manualAllPaths.length) return [];
-    if (!q) return manualAllPaths.slice(0, 400);
+    const q = manualSearchQueryActive.trim().toLowerCase();
+    if (!manualAllPaths.length || !q) return [];
     const out: string[] = [];
     for (const p of manualAllPaths) {
       const n = p.replace(/\\/g, "/").toLowerCase();
@@ -325,13 +338,12 @@ export function TagEditorModal({
       }
     }
     return out;
-  }, [manualAllPaths, manualSearchQuery]);
+  }, [manualAllPaths, manualSearchQueryActive]);
 
   const manualTruncated =
     manualAllPaths.length > 0 &&
-    (manualSearchQuery.trim()
-      ? manualFilteredPaths.length >= 400
-      : manualAllPaths.length > 400);
+    manualSearchQueryActive.trim().length > 0 &&
+    manualFilteredPaths.length >= 400;
 
   const manualDbColumnIds = useMemo((): Mp3TableColumnId[] => {
     if (manualMusicDbColumnIds && manualMusicDbColumnIds.length > 0) return manualMusicDbColumnIds;
@@ -1076,7 +1088,9 @@ export function TagEditorModal({
                 title="Manuelle Suche: MP3 in der Musikdatenbank filtern und diesem Eintrag zuordnen."
                 onClick={() => {
                   setMusicDbNoMatchHint(null);
-                  setManualSearchQuery("");
+                  const initial = defaultManualMusicDbFilterTerm(p7SearchSource);
+                  setManualSearchQueryInput(initial);
+                  setManualSearchQueryActive("");
                   setManualSelectedPath(null);
                   setManualSearchOpen(true);
                 }}
@@ -1162,19 +1176,35 @@ export function TagEditorModal({
             <label className="tag-manual-db-filter-label" htmlFor="tag-manual-db-filter">
               Filter (Pfad oder Dateiname)
             </label>
-            <input
-              id="tag-manual-db-filter"
-              className="modal-dup-tag-form-input tag-manual-db-filter-input"
-              type="search"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="z. B. Ordnername oder Teil des Dateinamens"
-              value={manualSearchQuery}
-              onChange={(e) => {
-                setManualSearchQuery(e.target.value);
-                setManualSelectedPath(null);
-              }}
-            />
+            <div className="tag-manual-db-filter-row">
+              <input
+                id="tag-manual-db-filter"
+                className="modal-dup-tag-form-input tag-manual-db-filter-input"
+                type="search"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="z. B. Ordnername oder Teil des Dateinamens"
+                value={manualSearchQueryInput}
+                onChange={(e) => {
+                  setManualSearchQueryInput(e.target.value);
+                  setManualSelectedPath(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    runManualMusicDbSearch();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn-modal primary tag-manual-db-search-btn"
+                disabled={manualPathsBusy}
+                onClick={runManualMusicDbSearch}
+              >
+                SUCHEN
+              </button>
+            </div>
             {manualPathsBusy ? (
               <p className="modal-lead modal-lead--muted" role="status">
                 Musikdatenbank wird geladen …
@@ -1186,11 +1216,11 @@ export function TagEditorModal({
             ) : (
               <>
                 <p className="tag-manual-db-count mono-cell" aria-live="polite">
-                  {manualFilteredPaths.length} Treffer
-                  {manualTruncated ? " (max. 400 angezeigt — Filter verfeinern)" : ""}
-                  {manualAllPaths.length > 0 && !manualSearchQuery.trim()
-                    ? ` · ${manualAllPaths.length} MP3 gesamt`
-                    : ""}
+                  {!manualSearchQueryActive.trim()
+                    ? manualAllPaths.length > 0
+                      ? `Suchbegriff anpassen und „Suchen“ klicken · ${manualAllPaths.length} MP3 in der Datenbank`
+                      : "Keine MP3 in der Musikdatenbank."
+                    : `${manualFilteredPaths.length} Treffer${manualTruncated ? " (max. 400 — Filter verfeinern)" : ""}`}
                 </p>
                 <div className="tag-manual-db-table-scroll" role="region" aria-label="Musikdatenbank-Treffer">
                   <table className="tag-manual-db-table">

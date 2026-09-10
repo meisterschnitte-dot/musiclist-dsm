@@ -8,6 +8,7 @@ import {
 } from "../audio/audioTags";
 import {
   fileTagKey,
+  playlistEntryTagStoreKey,
   playlistRowTagOverlay,
   playlistTagKey,
   type TagStore,
@@ -77,5 +78,29 @@ export function applyTagsByRowIdToTagStore(
     else next[playlistTagKey(rowId)] = overlay;
   }
 
+  return next;
+}
+
+/** Überträgt kopierte Anzeige-Tags auf eine oder mehrere Playlist-Zeilen (Tag-Store, ohne MP3 zu schreiben). */
+export function applyDisplayTagsToPlaylistRows(
+  playlist: PlaylistEntry[],
+  targetIndices: readonly number[],
+  displayTags: AudioTags,
+  prev: TagStore
+): TagStore {
+  const next = { ...prev };
+  const snapshot = mergeWarnungForDisplay({ ...displayTags });
+  for (const i of targetIndices) {
+    const row = playlist[i];
+    if (!row) continue;
+    const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
+    const overlay = overlayFromForm(base, snapshot);
+    const key = playlistEntryTagStoreKey(row);
+    if (Object.keys(overlay).length === 0) delete next[key];
+    else next[key] = overlay;
+    if (row.linkedTrackFileName?.trim()) {
+      delete next[playlistTagKey(row.id)];
+    }
+  }
   return next;
 }

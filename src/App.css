@@ -1,3 +1,12 @@
+.table-wrap--filter-pending {
+  opacity: 0.92;
+  transition: opacity 0.15s ease;
+}
+
+.table-wrap--filter-pending tbody {
+  pointer-events: none;
+}
+
 :root {
   --app-font-scale: 1;
   /** Grob Menü + #root-Padding + Lücken (Höhenberechnung in App.tsx: 9.5 × root-rem). */
@@ -1821,7 +1830,8 @@ body {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-  min-width: 100%;
+  /* min-width nicht 100% — sonst greift Zoom unter 1 (Überblick) nicht */
+  min-width: 0;
   box-sizing: border-box;
 }
 
@@ -3223,10 +3233,24 @@ body {
   color: var(--app-text-muted);
 }
 
-.tag-manual-db-filter-input {
-  width: 100%;
-  box-sizing: border-box;
+.tag-manual-db-filter-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: stretch;
   margin-bottom: 0.45rem;
+}
+
+.tag-manual-db-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  box-sizing: border-box;
+  margin-bottom: 0;
+}
+
+.tag-manual-db-search-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .tag-manual-db-count {

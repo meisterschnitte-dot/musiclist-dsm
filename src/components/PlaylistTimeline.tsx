@@ -20,7 +20,8 @@ import {
 /** Standard-Start-TC der Timeline: 00:00:00:00 bei 25 fps. */
 export const DEFAULT_TIMELINE_ORIGIN_FRAMES = 0;
 
-const ZOOM_MIN = 1;
+/** Kleinster Zoom: Timeline auf ~20 % Breite (Überblick über lange Playlists). */
+const ZOOM_MIN = 0.2;
 const ZOOM_MAX = 24;
 const ZOOM_STEP = 1.12;
 const THUMB_MIN_PX = 8;

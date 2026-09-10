@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -60,8 +61,10 @@ import {
   serializePlaylistLibraryFile,
 } from "./edl/playlistLibraryFile";
 import {
+  applyDisplayTagsToPlaylistRows,
   applyTagsByRowIdToTagStore,
   buildTagsByRowIdForLibrarySave,
+  mergedTagsForPlaylistRow,
 } from "./edl/playlistLibraryTagPersistence";
 import { parseEdl } from "./edl/parseEdl";
 import { eventsToMergedPlaylist } from "./edl/mergePlaylist";
@@ -517,42 +520,40 @@ function splitPathForDupModal(raw: string): { dir: string; base: string } {
   return { dir: t.slice(0, i + 1), base: t.slice(i + 1) };
 }
 
-/** Zeichen-Indizes in `a`, die zur LCS mit `b` gehören (Vergleich case-insensitive). */
-function dupFilenameLcsIndicesInA(a: string, b: string): Set<number> {
-  const s1 = [...a.toLowerCase()];
-  const s2 = [...b.toLowerCase()];
-  const n = s1.length;
-  const m = s2.length;
-  if (n === 0 || m === 0) return new Set();
-  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      dp[i][j] =
-        s1[i - 1] === s2[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
+/**
+ * Zeichen in `a`, die mit `b` übereinstimmen (case-insensitive): gemeinsames Präfix und
+ * gemeinsames Suffix (linksbündig). Keine LCS — vermeidet „springende“ grüne Buchstaben.
+ */
+function dupFilenameMatchIndicesInA(a: string, b: string): Set<number> {
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  const n = a.length;
+  const m = b.length;
+  const out = new Set<number>();
+  if (n === 0 || m === 0) return out;
+
+  let prefixEnd = 0;
+  while (prefixEnd < n && prefixEnd < m && al[prefixEnd] === bl[prefixEnd]) {
+    out.add(prefixEnd);
+    prefixEnd++;
   }
-  const inLcs = new Set<number>();
-  let i = n;
-  let j = m;
-  while (i > 0 && j > 0) {
-    if (s1[i - 1] === s2[j - 1]) {
-      inLcs.add(i - 1);
-      i--;
-      j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
+
+  let ai = n - 1;
+  let bi = m - 1;
+  while (ai >= prefixEnd && bi >= prefixEnd && al[ai] === bl[bi]) {
+    out.add(ai);
+    ai--;
+    bi--;
   }
-  return inLcs;
+
+  return out;
 }
 
 function DupModalComparedFilename({ text, other }: { text: string; other: string }) {
   if (text.toLowerCase() === other.toLowerCase()) {
     return <span className="modal-dup-filename modal-dup-filename--full-match">{text}</span>;
   }
-  const matchIdx = dupFilenameLcsIndicesInA(text, other);
+  const matchIdx = dupFilenameMatchIndicesInA(text, other);
   const segments: ReactNode[] = [];
   let buf = "";
   let bufMatch: boolean | null = null;
@@ -980,6 +981,8 @@ export default function App() {
   /** ID3/Merged werden vor dem Öffnen des Tag-Dialogs geladen. */
   const [tagModalLoadBusy, setTagModalLoadBusy] = useState(false);
   const [tagsCtxMenu, setTagsCtxMenu] = useState<TagsCtxMenuState>(null);
+  /** Zwischenablage für Copy/Paste Tags in der EDL- & Playlist-Tabelle. */
+  const [playlistTagsClipboard, setPlaylistTagsClipboard] = useState<AudioTags | null>(null);
   /** Anteil der oberen Pane (EDL- & Playlist) an der Split-Höhe (Musikdatenbank = Rest). */
   const [splitTopFrac, setSplitTopFrac] = useState(0.5);
   const splitPanesRef = useRef<HTMLDivElement>(null);
@@ -1045,6 +1048,11 @@ export default function App() {
   const mp3ColGroupRef = useRef<HTMLTableColElement | null>(null);
   const [edlFilters, setEdlFilters] = useState<Record<EdlTableColumnId, string>>(emptyEdlFiltersRecord);
   const [mp3Filters, setMp3Filters] = useState<Record<Mp3TableColumnId, string>>(emptyMp3FiltersRecord);
+  /** Eingabe sofort; schwere Filter-/Sort-Logik verzögert (React Concurrent). */
+  const edlFiltersForMatching = useDeferredValue(edlFilters);
+  const mp3FiltersForMatching = useDeferredValue(mp3Filters);
+  const edlFiltersMatchPending = edlFilters !== edlFiltersForMatching;
+  const mp3FiltersMatchPending = mp3Filters !== mp3FiltersForMatching;
   const [mp3Sort, setMp3Sort] = useState<{
     columnId: Mp3TableColumnId;
     direction: SortDirection;
@@ -1953,6 +1961,58 @@ export default function App() {
       await refreshTagStoreFromMp3Paths(fileNames);
     },
     [refreshTagStoreFromMp3Paths]
+  );
+
+  const playlistTagsClipboardPasteReady = useMemo(
+    () =>
+      !!playlistTagsClipboard &&
+      (hasAnyAudioTagValue(playlistTagsClipboard) || playlistTagsClipboard.warnung === true),
+    [playlistTagsClipboard]
+  );
+
+  const copyPlaylistTagsFromRow = useCallback(
+    (playlistIndex: number) => {
+      if (!playlist?.length || playlistIndex < 0 || playlistIndex >= playlist.length) return;
+      const row = playlist[playlistIndex];
+      if (!row) return;
+      const tags = mergedTagsForPlaylistRow(row, tagStoreRef.current);
+      setPlaylistTagsClipboard(tags);
+      setError(null);
+      setInfoMessage("Tags kopiert (Copy Tags).");
+    },
+    [playlist]
+  );
+
+  const pastePlaylistTagsToRows = useCallback(
+    (indices: readonly number[]) => {
+      if (!playlist?.length || !playlistTagsClipboardPasteReady || !playlistTagsClipboard) return;
+      const unique = [...new Set(indices.filter((i) => i >= 0 && i < playlist.length))];
+      if (unique.length === 0) return;
+      setTagStore((prev) => {
+        const next = applyDisplayTagsToPlaylistRows(
+          playlist,
+          unique,
+          playlistTagsClipboard,
+          prev
+        );
+        persistTagStore(next);
+        persistOpenPlaylistLibraryFile(playlist, next);
+        return next;
+      });
+      setInfoMessage(
+        unique.length === 1
+          ? "Tags eingefügt (Paste Tags)."
+          : `Tags auf ${unique.length} Einträge eingefügt (Paste Tags).`
+      );
+      setError(null);
+    },
+    [
+      playlist,
+      playlistTagsClipboard,
+      playlistTagsClipboardPasteReady,
+      persistTagStore,
+      persistOpenPlaylistLibraryFile,
+    ]
   );
 
   const runGemaXlsImport = useCallback(
@@ -4197,11 +4257,11 @@ export default function App() {
       const merged = playlistMergedTags[i] ?? {};
       const cellsMap = buildEdlRowCellsMap(row, i, merged);
       const vals = edlFilterColumnIdsForPlaylist.map((id) => cellsMap[id]);
-      const filters = edlFilterColumnIdsForPlaylist.map((id) => edlFilters[id] ?? "");
+      const filters = edlFilterColumnIdsForPlaylist.map((id) => edlFiltersForMatching[id] ?? "");
       if (matchesColumnFilters(vals, filters)) out.push(i);
     }
     return out;
-  }, [playlist, playlistMergedTags, edlFilters, edlFilterColumnIdsForPlaylist]);
+  }, [playlist, playlistMergedTags, edlFiltersForMatching, edlFilterColumnIdsForPlaylist]);
 
   const sortedPlaylistRowIndices = useMemo(() => {
     const indices = [...filteredPlaylistRowIndices];
@@ -4394,13 +4454,13 @@ Oliver`,
       const idx = mp3IndexByName.get(name) ?? 1;
       const cellsMap = buildMp3RowCellsMap(name, merged, idx, musicDbMetadata[name]);
       const vals = mp3VisibleColumnIds.map((id) => cellsMap[id]);
-      const filters = mp3VisibleColumnIds.map((id) => mp3Filters[id] ?? "");
+      const filters = mp3VisibleColumnIds.map((id) => mp3FiltersForMatching[id] ?? "");
       return matchesColumnFilters(vals, filters);
     });
   }, [
     mp3KnownFromPlaylist,
     fileMergedTagsByName,
-    mp3Filters,
+    mp3FiltersForMatching,
     mp3IndexByName,
     musicDbMetadata,
     mp3VisibleColumnIds,
@@ -5066,6 +5126,10 @@ Oliver`,
           }
         } else {
           h += itemH; // Tags bearbeiten
+          if (!playlistAsCustomerExport) {
+            h += itemH; // Copy Tags
+            h += itemH; // Paste Tags
+          }
           const refreshCount = tagsCtxMenu.removeFromListIndices.filter((i) => {
             const linked = playlist?.[i]?.linkedTrackFileName?.trim();
             return linked && isMp3FileName(linked);
@@ -5345,7 +5409,17 @@ Oliver`,
 
                   <div className="panel-scroll">
                     {playlist && fileName ? (
-                      <div className="table-wrap table-wrap--dense">
+                      <div
+                        className={
+                          [
+                            "table-wrap",
+                            "table-wrap--dense",
+                            edlFiltersMatchPending && "table-wrap--filter-pending",
+                          ]
+                            .filter(Boolean)
+                            .join(" ") || undefined
+                        }
+                      >
                         <table className="table-dense table-resizable">
                           <colgroup ref={edlColGroupRef}>
                             {edlDisplayWidthsArr.map((w, i) => {
@@ -5934,7 +6008,17 @@ Oliver`,
                 }}
               >
               <div className="panel-scroll">
-                <div className="table-wrap table-wrap--dense">
+                  <div
+                    className={
+                      [
+                        "table-wrap",
+                        "table-wrap--dense",
+                        mp3FiltersMatchPending && "table-wrap--filter-pending",
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined
+                    }
+                  >
                   <table className="table-dense table-resizable">
                     <colgroup ref={mp3ColGroupRef}>
                       {mp3VisibleWidthsArr.map((w, i) => {
@@ -6182,6 +6266,45 @@ Oliver`,
                   ? `Tags bearbeiten (${tagsCtxMenu.deleteTargets.length}) …`
                   : "Tags bearbeiten"}
             </button>
+            {tagsCtxMenu.kind === "playlist" && !playlistAsCustomerExport && (
+              <>
+                <button
+                  type="button"
+                  className="tags-ctx-menu-item tags-ctx-menu-item--border"
+                  role="menuitem"
+                  title="Aktuelle Tag-Anzeige dieser Zeile für Paste Tags merken."
+                  onClick={() => {
+                    const m = tagsCtxMenu;
+                    if (m?.kind !== "playlist") return;
+                    setTagsCtxMenu(null);
+                    copyPlaylistTagsFromRow(m.index);
+                  }}
+                >
+                  Copy Tags
+                </button>
+                <button
+                  type="button"
+                  className="tags-ctx-menu-item"
+                  role="menuitem"
+                  disabled={!playlistTagsClipboardPasteReady}
+                  title={
+                    playlistTagsClipboardPasteReady
+                      ? "Kopierte Tags auf die ausgewählte(n) Zeile(n) übertragen (nur Anzeige/Tag-Store, MP3 unverändert)."
+                      : "Zuerst Copy Tags auf einer Zeile ausführen."
+                  }
+                  onClick={() => {
+                    const m = tagsCtxMenu;
+                    if (m?.kind !== "playlist" || !playlistTagsClipboardPasteReady) return;
+                    setTagsCtxMenu(null);
+                    pastePlaylistTagsToRows(m.removeFromListIndices);
+                  }}
+                >
+                  {tagsCtxMenu.removeFromListIndices.length === 1
+                    ? "Paste Tags"
+                    : `Paste Tags (${tagsCtxMenu.removeFromListIndices.length}) …`}
+                </button>
+              </>
+            )}
             {sessionUserId &&
               (tagsCtxMenu.kind === "file" ||
                 tagsCtxMenu.removeFromListIndices.some((i) => {
