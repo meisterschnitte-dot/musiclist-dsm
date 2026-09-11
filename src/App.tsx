@@ -168,6 +168,10 @@ import {
   sanitizeFilenameStem,
   stripExtension,
 } from "./tracks/sanitizeFilename";
+import {
+  dupFilenameMatchIndicesInA,
+  dupFilenamesFullyEqual,
+} from "./tracks/dupFilenameCompare";
 import { getMusicDbPathsMissingOnServer } from "./tracks/missingMusicDbFiles";
 import { createFakeMp3Blob } from "./tracks/fakeMp3Blob";
 import {
@@ -527,37 +531,8 @@ function splitPathForDupModal(raw: string): { dir: string; base: string } {
   return { dir: t.slice(0, i + 1), base: t.slice(i + 1) };
 }
 
-/**
- * Zeichen in `a`, die mit `b` übereinstimmen (case-insensitive): gemeinsames Präfix und
- * gemeinsames Suffix (linksbündig). Keine LCS — vermeidet „springende“ grüne Buchstaben.
- */
-function dupFilenameMatchIndicesInA(a: string, b: string): Set<number> {
-  const al = a.toLowerCase();
-  const bl = b.toLowerCase();
-  const n = a.length;
-  const m = b.length;
-  const out = new Set<number>();
-  if (n === 0 || m === 0) return out;
-
-  let prefixEnd = 0;
-  while (prefixEnd < n && prefixEnd < m && al[prefixEnd] === bl[prefixEnd]) {
-    out.add(prefixEnd);
-    prefixEnd++;
-  }
-
-  let ai = n - 1;
-  let bi = m - 1;
-  while (ai >= prefixEnd && bi >= prefixEnd && al[ai] === bl[bi]) {
-    out.add(ai);
-    ai--;
-    bi--;
-  }
-
-  return out;
-}
-
 function DupModalComparedFilename({ text, other }: { text: string; other: string }) {
-  if (text.toLowerCase() === other.toLowerCase()) {
+  if (dupFilenamesFullyEqual(text, other)) {
     return <span className="modal-dup-filename modal-dup-filename--full-match">{text}</span>;
   }
   const matchIdx = dupFilenameMatchIndicesInA(text, other);
