@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -23,6 +24,14 @@ import {
   type GvlLabelEntry,
 } from "../storage/gvlLabelStore";
 import { parseGemaOcrText } from "../audio/parseGemaOcrText";
+import {
+  looksLikeGemaWerkRepertoireText,
+  parseGemaWerkRepertoireText,
+} from "../audio/parseGemaWerkRepertoireText";
+import {
+  GEMA_WERK_SUCHE_URL,
+  openGemaPortalWerkSearchWithOptionalClip,
+} from "../gemaPortalSearch";
 import {
   looksLikeCezameMetadataText,
   parseCezameMetadataText,
@@ -175,6 +184,54 @@ function defaultManualMusicDbFilterTerm(source: string | null | undefined): stri
 }
 
 /** Pfad normal, Dateiname ohne .mp3/.wav in Hellblau (Anzeige im Tag-Dialog). */
+const TagManualDbFilterInput = memo(function TagManualDbFilterInput({
+  initialValue,
+  disabled,
+  onSearch,
+}: {
+  initialValue: string;
+  disabled: boolean;
+  onSearch: (query: string) => void;
+}) {
+  const [draft, setDraft] = useState(initialValue);
+  useEffect(() => {
+    setDraft(initialValue);
+  }, [initialValue]);
+
+  const submit = useCallback(() => {
+    onSearch(draft.trim());
+  }, [draft, onSearch]);
+
+  return (
+    <div className="tag-manual-db-filter-row">
+      <input
+        id="tag-manual-db-filter"
+        className="modal-dup-tag-form-input tag-manual-db-filter-input"
+        type="search"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="z. B. Ordnername oder Teil des Dateinamens"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="btn-modal primary tag-manual-db-search-btn"
+        disabled={disabled}
+        onClick={submit}
+      >
+        SUCHEN
+      </button>
+    </div>
+  );
+});
+
 function splitTagEditorFilenameDisplay(source: string): {
   dir: string;
   stem: string;
@@ -272,7 +329,7 @@ export function TagEditorModal({
   const [manualAllPaths, setManualAllPaths] = useState<string[]>([]);
   const [manualPathsBusy, setManualPathsBusy] = useState(false);
   const [manualPathsErr, setManualPathsErr] = useState<string | null>(null);
-  const [manualSearchQueryInput, setManualSearchQueryInput] = useState("");
+  const [manualFilterSeed, setManualFilterSeed] = useState("");
   /** Erst nach Klick auf „Suchen“ (oder Enter) — entlastet große Musikdatenbanken. */
   const [manualSearchQueryActive, setManualSearchQueryActive] = useState("");
   const [manualSelectedPath, setManualSelectedPath] = useState<string | null>(null);
@@ -337,10 +394,10 @@ export function TagEditorModal({
     };
   }, [manualSearchOpen, open]);
 
-  const runManualMusicDbSearch = useCallback(() => {
-    setManualSearchQueryActive(manualSearchQueryInput.trim());
+  const runManualMusicDbSearch = useCallback((query: string) => {
+    setManualSearchQueryActive(query.trim());
     setManualSelectedPath(null);
-  }, [manualSearchQueryInput]);
+  }, []);
 
   const manualFilteredPaths = useMemo(() => {
     const q = manualSearchQueryActive.trim().toLowerCase();
@@ -454,7 +511,9 @@ export function TagEditorModal({
   };
 
   const applyPastedOcr = () => {
-    const { fields, extraCommentLines } = looksLikeAplPublishingMetadata(pasteDraft)
+    const { fields, extraCommentLines } = looksLikeGemaWerkRepertoireText(pasteDraft)
+      ? parseGemaWerkRepertoireText(pasteDraft)
+      : looksLikeAplPublishingMetadata(pasteDraft)
       ? parseAplPublishingMetadataText(pasteDraft)
       : looksLikeBmgPmMetadata(pasteDraft)
       ? parseBmgPmMetadataText(pasteDraft)
@@ -811,7 +870,7 @@ export function TagEditorModal({
         {!multiTrack ? (
         <div className="tag-import-block">
           <div className="tag-import-heading">
-            Text aus GEMA / Google Lens / BMG PM / Apple Music / Audio Network (Titel, Tabelle) /
+            Text aus GEMA (Portal Werksuche, Lens) / Google Lens / BMG PM / Apple Music / Audio Network (Titel, Tabelle) /
             Bibliothèque (Track, Code, Publisher, …) / Cézame (Titre, LC, ISRC, …) / Sonoton / Extreme
             Music / Earmotion / Blankframe
           </div>
@@ -929,6 +988,15 @@ export function TagEditorModal({
                   (e.currentTarget as HTMLImageElement).src = "/p7s1.svg";
                 }}
               />
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              aria-label="GEMA Werksuche"
+              title={`${GEMA_WERK_SUCHE_URL} — Dateiname (ohne .mp3/.wav) in die Zwischenablage; im Portal einfügen. Beteiligte/Verlage kopieren und unten einfügen — „Felder übernehmen“ (Komponist = Interpret, Sub-Verleger = Label, Originalverlag = Hersteller).`}
+              onClick={() => openGemaPortalWerkSearchWithOptionalClip(p7SearchSource)}
+            >
+              GEMA
             </button>
             <button
               type="button"
@@ -1115,7 +1183,7 @@ export function TagEditorModal({
                 onClick={() => {
                   setMusicDbNoMatchHint(null);
                   const initial = defaultManualMusicDbFilterTerm(p7SearchSource);
-                  setManualSearchQueryInput(initial);
+                  setManualFilterSeed(initial);
                   setManualSearchQueryActive("");
                   setManualSelectedPath(null);
                   setManualSearchOpen(true);
@@ -1202,35 +1270,11 @@ export function TagEditorModal({
             <label className="tag-manual-db-filter-label" htmlFor="tag-manual-db-filter">
               Filter (Pfad oder Dateiname)
             </label>
-            <div className="tag-manual-db-filter-row">
-              <input
-                id="tag-manual-db-filter"
-                className="modal-dup-tag-form-input tag-manual-db-filter-input"
-                type="search"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="z. B. Ordnername oder Teil des Dateinamens"
-                value={manualSearchQueryInput}
-                onChange={(e) => {
-                  setManualSearchQueryInput(e.target.value);
-                  setManualSelectedPath(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    runManualMusicDbSearch();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="btn-modal primary tag-manual-db-search-btn"
-                disabled={manualPathsBusy}
-                onClick={runManualMusicDbSearch}
-              >
-                SUCHEN
-              </button>
-            </div>
+            <TagManualDbFilterInput
+              initialValue={manualFilterSeed}
+              disabled={manualPathsBusy}
+              onSearch={runManualMusicDbSearch}
+            />
             {manualPathsBusy ? (
               <p className="modal-lead modal-lead--muted" role="status">
                 Musikdatenbank wird geladen …

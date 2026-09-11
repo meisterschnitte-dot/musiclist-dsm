@@ -12,7 +12,7 @@ import {
   type WcpmDbFilters,
   type WcpmDbRowDto,
 } from "../api/musikverlageApi";
-import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { DebouncedSearchInput } from "./DebouncedSearchInput";
 import type { MusikverlagId } from "../musikverlage/musikverlageCatalog";
 import { startColumnResizeDrag } from "../tableColResizeDrag";
 import {
@@ -63,7 +63,6 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
   const [gvlDb, setGvlDb] = useState<GvlLabelDb | null>(() => loadGvlLabelDb());
   const [colWidths, setColWidths] = useState<number[]>(() => [...COL_DEFAULT_WIDTHS]);
   const filterActive = useMemo(() => anyFilterActive(filters), [filters]);
-  const debouncedFilters = useDebouncedValue(filters, 220);
   const searchSeqRef = useRef(0);
   const colWidthsRef = useRef(colWidths);
   const colGroupRef = useRef<HTMLTableColElement | null>(null);
@@ -122,8 +121,8 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
 
   useEffect(() => {
     if (!open || !verlagId) return;
-    void onSearch(debouncedFilters);
-  }, [open, verlagId, debouncedFilters, onSearch]);
+    void onSearch(filters);
+  }, [open, verlagId, filters, onSearch]);
 
   const rowsView = useMemo<RowView[]>(() => {
     return rows.map((r) => {
@@ -283,65 +282,65 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
               </tr>
               <tr>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.filenameStem}
-                    onChange={(e) => setFilters((p) => ({ ...p, filenameStem: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, filenameStem: v }))}
                     placeholder="Suchen …"
                   />
                 </th>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.songTitle}
-                    onChange={(e) => setFilters((p) => ({ ...p, songTitle: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, songTitle: v }))}
                     placeholder="Suchen …"
                   />
                 </th>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.artist}
-                    onChange={(e) => setFilters((p) => ({ ...p, artist: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, artist: v }))}
                     placeholder="Suchen …"
                   />
                 </th>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.album}
-                    onChange={(e) => setFilters((p) => ({ ...p, album: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, album: v }))}
                     placeholder="Suchen …"
                   />
                 </th>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.composer}
-                    onChange={(e) => setFilters((p) => ({ ...p, composer: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, composer: v }))}
                     placeholder="Suchen …"
                   />
                 </th>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.isrc}
-                    onChange={(e) => setFilters((p) => ({ ...p, isrc: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, isrc: v }))}
                     placeholder="Suchen …"
                   />
                 </th>
                 <th>
-                  <input
+                  <DebouncedSearchInput
                     type="search"
                     className="table-col-filter-input"
                     value={filters.labelcode}
-                    onChange={(e) => setFilters((p) => ({ ...p, labelcode: e.target.value }))}
+                    onChange={(v) => setFilters((p) => ({ ...p, labelcode: v }))}
                     placeholder="Suchen …"
                   />
                 </th>

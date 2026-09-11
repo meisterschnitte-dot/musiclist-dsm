@@ -8,6 +8,7 @@ import {
   type ChangeEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { DebouncedSearchInput } from "./DebouncedSearchInput";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { openGvlWebGuessSearch } from "../gvlWebSearch";
 import type { GvlLabelDb, GvlLabelEntry } from "../storage/gvlLabelStore";
@@ -305,12 +306,12 @@ export function SystemSettingsModal({
                       <div className="table-th-head-row">
                         <span className="table-th-text">Labelcode</span>
                       </div>
-                      <input
+                      <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
                         placeholder="Suchen …"
                         value={qLabelcode}
-                        onChange={(e) => setQLabelcode(e.target.value)}
+                        onChange={setQLabelcode}
                         autoComplete="off"
                         aria-label="Labelcode filtern"
                         onMouseDown={(e) => e.stopPropagation()}
@@ -330,12 +331,12 @@ export function SystemSettingsModal({
                       <div className="table-th-head-row">
                         <span className="table-th-text">Label</span>
                       </div>
-                      <input
+                      <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
                         placeholder="Suchen …"
                         value={qLabel}
-                        onChange={(e) => setQLabel(e.target.value)}
+                        onChange={setQLabel}
                         autoComplete="off"
                         aria-label="Label filtern"
                         onMouseDown={(e) => e.stopPropagation()}
@@ -355,12 +356,12 @@ export function SystemSettingsModal({
                       <div className="table-th-head-row">
                         <span className="table-th-text">Kürzel</span>
                       </div>
-                      <input
+                      <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
                         placeholder="Suchen …"
                         value={qKuerzel}
-                        onChange={(e) => setQKuerzel(e.target.value)}
+                        onChange={setQKuerzel}
                         autoComplete="off"
                         aria-label="Kürzel filtern"
                         onMouseDown={(e) => e.stopPropagation()}
@@ -380,12 +381,12 @@ export function SystemSettingsModal({
                       <div className="table-th-head-row">
                         <span className="table-th-text">PLM</span>
                       </div>
-                      <input
+                      <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
                         placeholder="Suchen …"
                         value={qPlm}
-                        onChange={(e) => setQPlm(e.target.value)}
+                        onChange={setQPlm}
                         autoComplete="off"
                         aria-label="PLM filtern"
                         onMouseDown={(e) => e.stopPropagation()}
@@ -405,12 +406,12 @@ export function SystemSettingsModal({
                       <div className="table-th-head-row">
                         <span className="table-th-text">Hersteller</span>
                       </div>
-                      <input
+                      <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
                         placeholder="Suchen …"
                         value={qHersteller}
-                        onChange={(e) => setQHersteller(e.target.value)}
+                        onChange={setQHersteller}
                         autoComplete="off"
                         aria-label="Hersteller filtern"
                         onMouseDown={(e) => e.stopPropagation()}
@@ -430,12 +431,12 @@ export function SystemSettingsModal({
                       <div className="table-th-head-row">
                         <span className="table-th-text">Rechterückrufe</span>
                       </div>
-                      <input
+                      <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
                         placeholder="Suchen …"
                         value={qRechter}
-                        onChange={(e) => setQRechter(e.target.value)}
+                        onChange={setQRechter}
                         autoComplete="off"
                         aria-label="Rechterückrufe filtern"
                         onMouseDown={(e) => e.stopPropagation()}

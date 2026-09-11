@@ -8,6 +8,12 @@ function keyFor(userId: string): string {
   return `${KEY_PREFIX}${userId}`;
 }
 
+export type PersistedLibraryFileRefV1 = {
+  parentSegments: string[];
+  fileName: string;
+  kind: "playlist" | "edl" | "gemaXls";
+};
+
 export type PersistedWorkspaceV1 = {
   v: 1;
   fileName: string;
@@ -17,6 +23,8 @@ export type PersistedWorkspaceV1 = {
   playlist: PlaylistEntry[];
   /** Fehlt bei älteren Speicherständen → wie „edl“, wenn edlText nicht leer. */
   sessionKind?: "edl" | "playlistLinked";
+  /** Geöffnete Bibliotheksdatei — für .list-Persistenz der MP3-Verknüpfungen nach Neustart. */
+  libraryFile?: PersistedLibraryFileRefV1 | null;
 };
 
 export function isPersistedWorkspaceV1(o: unknown): o is PersistedWorkspaceV1 {

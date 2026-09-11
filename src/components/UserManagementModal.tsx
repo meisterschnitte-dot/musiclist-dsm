@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { DebouncedSearchInput } from "./DebouncedSearchInput";
 import { fetchCustomersList, type CustomerRecord } from "../api/customersApi";
 import { sendUserInvite } from "../api/sendUserInvite";
 import {
@@ -409,12 +410,12 @@ export function UserManagementModal({
         {info && <p className="modal-lead" style={{ color: "var(--muted, #666)" }}>{info}</p>}
 
         <div className="user-mgmt-filter-row">
-          <input
+          <DebouncedSearchInput
             type="search"
             className="user-mgmt-filter-input"
             placeholder="Benutzer filtern (Name, E-Mail, Firma, Rolle) …"
             value={listFilter}
-            onChange={(e) => setListFilter(e.target.value)}
+            onChange={setListFilter}
             autoComplete="off"
           />
           {listFilter.trim() ? (
