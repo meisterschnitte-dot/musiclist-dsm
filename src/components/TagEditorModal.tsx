@@ -991,15 +991,6 @@ export function TagEditorModal({
             </button>
             <button
               type="button"
-              className="btn-modal"
-              aria-label="GEMA Werksuche"
-              title={`${GEMA_WERK_SUCHE_URL} — Dateiname (ohne .mp3/.wav) in die Zwischenablage; im Portal einfügen. Beteiligte/Verlage kopieren und unten einfügen — „Felder übernehmen“ (Komponist = Interpret, Sub-Verleger = Label, Originalverlag = Hersteller).`}
-              onClick={() => openGemaPortalWerkSearchWithOptionalClip(p7SearchSource)}
-            >
-              GEMA
-            </button>
-            <button
-              type="button"
               className="btn-modal btn-modal--tag-portal"
               aria-label="Apple Music"
               title={`${APPLE_MUSIC_SEARCH_URL} — Suchbegriff: nach erstem „/“ nur Dateiname; mit _ alles danach, ohne _ dann ganzer Name — Bindestriche/Unterstriche als Leerzeichen; gleicher Text in Zwischenablage und Suche.`}
@@ -1105,6 +1096,15 @@ export function TagEditorModal({
               onClick={() => void onBlankframeSearchClick()}
             >
               {blankframeApiBusy ? "Blankframe …" : "Blankframe"}
+            </button>
+            <button
+              type="button"
+              className="btn-modal"
+              aria-label="GEMA Werksuche"
+              title={`${GEMA_WERK_SUCHE_URL} — Dateiname (ohne .mp3/.wav) in die Zwischenablage; im Portal einfügen. Beteiligte/Verlage kopieren und unten einfügen — „Felder übernehmen“ (Komponist = Interpret, Sub-Verleger = Label, Originalverlag = Hersteller).`}
+              onClick={() => openGemaPortalWerkSearchWithOptionalClip(p7SearchSource)}
+            >
+              GEMA
             </button>
             <button
               type="button"

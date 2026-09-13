@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { APP_VERSION } from "../appVersion";
 import type { AppTheme } from "../storage/themeStorage";
 
 type MenuId = "verwaltung" | "benutzer" | null;
@@ -322,6 +323,9 @@ export function MenuBar({
             {infoMessage}
           </span>
         ) : null}
+        <span className="menubar-version" title="Musiclist-Version">
+          {APP_VERSION}
+        </span>
       </div>
     </nav>
   );
