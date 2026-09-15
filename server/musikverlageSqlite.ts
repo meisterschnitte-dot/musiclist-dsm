@@ -7,6 +7,8 @@ import {
   bmgpmRowKeyFromRow,
   bmgpmRowToTagPayload,
   extractBmgpmCatalogCodeFromFileName,
+  findBmgpmHeaderRowIndex,
+  formatBmgpmHeaderPreview,
   parseBmgpmHeaderRow,
   parseBmgpmReleaseDate,
 } from "../src/musikverlage/bmgpmTable";
@@ -116,17 +118,25 @@ function readFirstSheetRows(excelPath: string): { sheetName: string; rows: unkno
   if (ext === ".csv") {
     return { sheetName: path.basename(excelPath), rows: readCsvRows(excelPath) };
   }
-  const wb = XLSX.readFile(excelPath);
-  const sheetName = wb.SheetNames[0];
+  const wb = XLSX.readFile(excelPath, { cellDates: true });
+  let sheetName = wb.SheetNames[0];
   if (!sheetName) throw new Error("Excel-Datei enthält keine Tabelle.");
-  const ws = wb.Sheets[sheetName];
-  if (!ws) throw new Error("Excel-Datei enthält keine Tabelle.");
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, {
-    header: 1,
-    defval: "",
-    raw: false,
-  }) as unknown[][];
-  return { sheetName, rows };
+  let bestRows: unknown[][] = [];
+  for (const name of wb.SheetNames) {
+    const ws = wb.Sheets[name];
+    if (!ws) continue;
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, {
+      header: 1,
+      defval: "",
+      raw: false,
+    }) as unknown[][];
+    if (rows.length > bestRows.length) {
+      bestRows = rows;
+      sheetName = name;
+    }
+  }
+  if (!bestRows.length) throw new Error("Excel-Datei enthält keine Tabelle.");
+  return { sheetName, rows: bestRows };
 }
 
 function parseCsvSemicolonLine(line: string): string[] {
@@ -244,12 +254,19 @@ function ingestBmgpmExcelPath(
   if (!rows.length) {
     throw new Error(`BMGPM-Tabelle ist leer: ${path.basename(excelPath)}`);
   }
-  const headerMap = parseBmgpmHeaderRow(rows[0]!);
-  if (!headerMap) {
-    throw new Error(`Unerwartete Kopfzeile in der BMGPM-Tabelle: ${path.basename(excelPath)}`);
+  const headerRowIdx = findBmgpmHeaderRowIndex(rows);
+  if (headerRowIdx == null) {
+    const preview = rows
+      .slice(0, 3)
+      .map((row, i) => `Zeile ${i + 1}: ${formatBmgpmHeaderPreview(Array.isArray(row) ? row : [])}`)
+      .join(" · ");
+    throw new Error(
+      `BMGPM-Kopfzeile nicht erkannt (${path.basename(excelPath)}). Erwartet u. a. „Track: Audio Filename“ oder „Album: Code“. ${preview}`
+    );
   }
+  const headerMap = parseBmgpmHeaderRow(rows[headerRowIdx]!)!;
   let n = 0;
-  for (let r = 1; r < rows.length; r++) {
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const row = rows[r];
     if (!Array.isArray(row) || row.length === 0) continue;
     const rowKey = bmgpmRowKeyFromRow(headerMap, row);
@@ -269,6 +286,12 @@ function ingestBmgpmExcelPath(
     }
     ins.run(rowKey.toLowerCase(), release ?? null, JSON.stringify(payload));
     n++;
+  }
+  if (n === 0 && !minReleaseExclusive) {
+    const dataRows = rows.length - headerRowIdx - 1;
+    throw new Error(
+      `BMGPM: 0 Zeilen importiert (${path.basename(excelPath)}, ${dataRows.toLocaleString("de-DE")} Datenzeilen unter der Kopfzeile). Spalten „Track: Audio Filename“ / „Album: Code“ prüfen.`
+    );
   }
   return n;
 }

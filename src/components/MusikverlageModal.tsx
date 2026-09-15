@@ -58,6 +58,10 @@ export function MusikverlageModal({ open, onClose }: Props) {
   const [apiDraft, setApiDraft] = useState<Partial<Record<MusikverlagId, string>>>({});
   const [uploadBusyId, setUploadBusyId] = useState<MusikverlagId | null>(null);
   const [dbModalId, setDbModalId] = useState<MusikverlagId | null>(null);
+  const [importProgress, setImportProgress] = useState<{ label: string; progress: number } | null>(
+    null
+  );
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const s = await fetchMusikverlageState();
@@ -101,25 +105,43 @@ export function MusikverlageModal({ open, onClose }: Props) {
     async (id: MusikverlagId, files: File[], mode: "replace" | "append") => {
       if (!files.length) return;
       setErr(null);
+      setSuccessMsg(null);
       setUploadBusyId(id);
+      const verlagLabel = data?.catalog.find((c) => c.id === id)?.label ?? id;
       try {
+        let lastRowCount: number | undefined;
         for (let i = 0; i < files.length; i++) {
           const file = files[i]!;
           const effectiveMode = mode === "append" || i > 0 ? "append" : "replace";
-          if (effectiveMode === "append") {
-            await appendMusikverlageXlsx(id, file);
-          } else {
-            await uploadMusikverlageXlsx(id, file);
-          }
+          setImportProgress({
+            label: `${verlagLabel}: ${file.name} (${effectiveMode === "append" ? "Ergänzen" : "Hochladen"})`,
+            progress: 0,
+          });
+          const onProgress = (p: { percent: number; label: string }) => {
+            setImportProgress({ label: p.label, progress: p.percent });
+          };
+          const result =
+            effectiveMode === "append"
+              ? await appendMusikverlageXlsx(id, file, onProgress)
+              : await uploadMusikverlageXlsx(id, file, onProgress);
+          lastRowCount = result.tableIndexedRowCount;
         }
         await reload();
+        const rows = lastRowCount ?? 0;
+        setSuccessMsg(
+          rows > 0
+            ? `Import erfolgreich: ${rows.toLocaleString("de-DE")} Zeilen in der Datenbank indexiert (${verlagLabel}).`
+            : `Import abgeschlossen (${verlagLabel}). Keine neuen Zeilen (z. B. Ergänzen: nur neuere Release-Daten).`
+        );
       } catch (e) {
+        setSuccessMsg(null);
         setErr(e instanceof Error ? e.message : "Upload fehlgeschlagen.");
       } finally {
+        setImportProgress(null);
         setUploadBusyId(null);
       }
     },
-    [reload]
+    [data?.catalog, reload]
   );
 
   const onRemoveFile = useCallback(
@@ -165,6 +187,11 @@ export function MusikverlageModal({ open, onClose }: Props) {
         {err ? (
           <p className="modal-error" role="alert">
             {err}
+          </p>
+        ) : null}
+        {successMsg ? (
+          <p className="musikverlage-import-success" role="status">
+            {successMsg}
           </p>
         ) : null}
         {busy || !data ? (
@@ -362,6 +389,33 @@ export function MusikverlageModal({ open, onClose }: Props) {
         verlagLabel={dbLabel}
         onClose={() => setDbModalId(null)}
       />
+      {importProgress ? (
+        <div
+          className="import-progress-backdrop import-progress-backdrop--stacked"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="musikverlage-import-progress-title"
+          aria-busy="true"
+        >
+          <div className="import-progress-dialog">
+            <p id="musikverlage-import-progress-title" className="import-progress-label">
+              {importProgress.label}
+            </p>
+            <div
+              className="import-progress-track"
+              role="progressbar"
+              aria-valuenow={importProgress.progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                className="import-progress-fill"
+                style={{ width: `${Math.max(2, Math.min(100, importProgress.progress))}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

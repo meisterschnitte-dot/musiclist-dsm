@@ -38,14 +38,36 @@ function headerMatches(norm: string, variants: string[]): boolean {
   return variants.some((v) => norm === v || norm.replace(/\./g, "") === v.replace(/\./g, ""));
 }
 
+function findCol(h: string[], variants: string[], pred?: (norm: string) => boolean): number | null {
+  const i = h.findIndex((x) => headerMatches(x, variants) || (pred ? pred(x) : false));
+  return i >= 0 ? i : null;
+}
+
+/** Kopfzeile steht oft nicht in Zeile 1 (Metadaten, Leerzeilen). */
+export function findBmgpmHeaderRowIndex(rows: unknown[][]): number | null {
+  const max = Math.min(rows.length, 40);
+  for (let r = 0; r < max; r++) {
+    const row = rows[r];
+    if (!Array.isArray(row)) continue;
+    if (parseBmgpmHeaderRow(row) != null) return r;
+  }
+  return null;
+}
+
+export function formatBmgpmHeaderPreview(headers: unknown[], maxCols = 8): string {
+  const parts = headers
+    .slice(0, maxCols)
+    .map((x) => cellStr(x))
+    .filter(Boolean);
+  return parts.length ? parts.join(" | ") : "(leer)";
+}
+
 export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
   const h = headers.map((x) => normBmgpmHeader(cellStr(x)));
   if (h.length === 0) return null;
 
-  const find = (variants: string[]): number | null => {
-    const i = h.findIndex((x) => headerMatches(x, variants));
-    return i >= 0 ? i : null;
-  };
+  const find = (variants: string[], pred?: (norm: string) => boolean): number | null =>
+    findCol(h, variants, pred);
 
   const writerPairs = new Map<number, { first: number; last: number }>();
   for (let c = 0; c < h.length; c++) {
@@ -53,7 +75,8 @@ export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
     const m =
       col.match(/^writer:(\d+):first\s*name$/) ??
       col.match(/^writer:(\d+)\s+first\s*name$/) ??
-      col.match(/^writer:(\d+):firstname$/);
+      col.match(/^writer:(\d+):firstname$/) ??
+      col.match(/^writer:(\d+)\s+firstname$/);
     if (m) {
       const n = Number.parseInt(m[1]!, 10);
       const cur = writerPairs.get(n) ?? { first: -1, last: -1 };
@@ -64,7 +87,8 @@ export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
     const m2 =
       col.match(/^writer:(\d+):last\s*name$/) ??
       col.match(/^writer:(\d+)\s+last\s*name$/) ??
-      col.match(/^writer:(\d+):lastname$/);
+      col.match(/^writer:(\d+):lastname$/) ??
+      col.match(/^writer:(\d+)\s+lastname$/);
     if (m2) {
       const n = Number.parseInt(m2[1]!, 10);
       const cur = writerPairs.get(n) ?? { first: -1, last: -1 };
@@ -76,27 +100,45 @@ export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
     if (p.first < 0 && p.last < 0) writerPairs.delete(n);
   }
 
-  const trackAudioFilenameIdx = find([
-    "track:audio filename",
-    "track audio filename",
-    "track:audio file name",
-    "track: file name",
-    "track:filename",
-  ]);
-  const albumReleaseDateIdx = find([
-    "album:release date",
-    "album release date",
-    "album: release date",
-  ]);
-  const albumCodeIdx = find(["album:code", "album code"]);
-  const albumTitleIdx = find(["album:title", "album title"]);
-  const albumDisplayTitleIdx = find(["album:display title", "album display title"]);
-  const trackTitleIdx = find(["track:title", "track title"]);
-  const trackArtistIdx = find(["track:artist", "track artist"]);
-  const trackArtistsIdx = find(["track:artist(s)", "track artist(s)", "track.artist(s)"]);
-  const trackComposersIdx = find(["track:composers", "track composers", "track:composer(s)"]);
-  const libraryNameIdx = find(["library:name", "library name"]);
-  const isrcIdx = find(["track:isrc", "isrc", "track isrc"]);
+  const trackAudioFilenameIdx =
+    find([
+      "track:audio filename",
+      "track audio filename",
+      "track:audio file name",
+      "track: file name",
+      "track:filename",
+      "file name",
+      "filename",
+      "original file name",
+    ]) ??
+    find([], (x) => /track[.:].*audio.*file/.test(x) || /^file\s*name$/.test(x));
+  const albumReleaseDateIdx =
+    find(["album:release date", "album release date"]) ??
+    find([], (x) => /album[.:].*release.*date/.test(x));
+  const albumCodeIdx =
+    find(["album:code", "album code"]) ?? find([], (x) => /album[.:].*code/.test(x) && !/barcode/.test(x));
+  const albumTitleIdx =
+    find(["album:title", "album title"]) ??
+    find([], (x) => /album[.:]title/.test(x) && !/display/.test(x));
+  const albumDisplayTitleIdx =
+    find(["album:display title", "album display title"]) ??
+    find([], (x) => /album[.:].*display.*title/.test(x));
+  const trackTitleIdx =
+    find(["track:title", "track title", "tracktitle"]) ??
+    find([], (x) => /track[.:]title/.test(x) && !/version/.test(x));
+  const trackArtistIdx =
+    find(["track:artist", "track artist"]) ?? find([], (x) => /^track[.:]artist$/.test(x));
+  const trackArtistsIdx =
+    find(["track:artist(s)", "track artist(s)", "track.artist(s)", "track:artists"]) ??
+    find([], (x) => /track[.:].*artist/.test(x) && /\(s\)|artists/.test(x));
+  const trackComposersIdx =
+    find(["track:composers", "track composers", "track:composer(s)", "track:composer"]) ??
+    find([], (x) => /track[.:].*composer/.test(x));
+  const libraryNameIdx =
+    find(["library:name", "library name", "catalog:name", "catalog name"]) ??
+    find([], (x) => /^library[.:]name/.test(x) || x === "catalog");
+  const isrcIdx =
+    find(["track:isrc", "isrc", "track isrc"]) ?? find([], (x) => x === "isrc" || /track[.:]isrc/.test(x));
 
   if (
     trackAudioFilenameIdx == null &&
@@ -122,8 +164,23 @@ export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
   };
 }
 
+function excelSerialToIso(n: number): string | null {
+  if (!Number.isFinite(n) || n < 1) return null;
+  const ms = Math.round((n - 25569) * 86400 * 1000);
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
 /** ISO-Datum YYYY-MM-DD oder null. */
 export function parseBmgpmReleaseDate(raw: unknown): string | null {
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+    return raw.toISOString().slice(0, 10);
+  }
+  if (typeof raw === "number" && raw > 2000) {
+    const fromSerial = excelSerialToIso(raw);
+    if (fromSerial) return fromSerial;
+  }
   const t = cellStr(raw);
   if (!t) return null;
   if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
