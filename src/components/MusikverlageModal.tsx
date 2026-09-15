@@ -8,7 +8,7 @@ import {
   type MusikverlageEntryDto,
   type MusikverlageStateResponse,
 } from "../api/musikverlageApi";
-import type { MusikverlagId } from "../musikverlage/musikverlageCatalog";
+import { musikverlagHasDatabase, type MusikverlagId } from "../musikverlage/musikverlageCatalog";
 import { MusikverlagDatabaseModal } from "./MusikverlagDatabaseModal";
 import { APPLE_MUSIC_SEARCH_URL } from "../appleMusicSearch";
 import { P7S1_MUSIKPORTAL_TRACK_RESEARCH_URL } from "../p7s1Musikportal";
@@ -271,9 +271,13 @@ export function MusikverlageModal({ open, onClose }: Props) {
                               <button
                                 type="button"
                                 className="btn-modal musikverlage-file-action-btn"
-                                disabled={ub || row.id !== "wcpm" || !hasAnyFiles}
+                                disabled={ub || !musikverlagHasDatabase(row.id) || !hasAnyFiles}
                                 onClick={() => setDbModalId(row.id)}
-                                title={row.id !== "wcpm" ? "Datenbankansicht aktuell nur für WCPM." : undefined}
+                                title={
+                                  !musikverlagHasDatabase(row.id)
+                                    ? "Datenbankansicht für diesen Verlag noch nicht verfügbar."
+                                    : undefined
+                                }
                               >
                                 Datenbank
                               </button>

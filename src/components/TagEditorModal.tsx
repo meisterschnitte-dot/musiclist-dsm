@@ -106,7 +106,7 @@ import {
   looksLikeExtremeMusicMetadata,
   parseExtremeMusicMetadataText,
 } from "../audio/parseExtremeMusicMetadataText";
-import { lookupWcpmTags } from "../api/musikverlageApi";
+import { lookupBmgpmTags, lookupWcpmTags } from "../api/musikverlageApi";
 import { apiSharedMusicDbFetch } from "../api/sharedTracksApi";
 import { basenamePath } from "../tracks/sanitizeFilename";
 import {
@@ -320,6 +320,8 @@ export function TagEditorModal({
   const [blankframeApiErr, setBlankframeApiErr] = useState<string | null>(null);
   const [wcpmApiBusy, setWcpmApiBusy] = useState(false);
   const [wcpmApiErr, setWcpmApiErr] = useState<string | null>(null);
+  const [bmgpmApiBusy, setBmgpmApiBusy] = useState(false);
+  const [bmgpmApiErr, setBmgpmApiErr] = useState<string | null>(null);
   const [sonotonMmdBusy, setSonotonMmdBusy] = useState(false);
   const [sonotonMmdErr, setSonotonMmdErr] = useState<string | null>(null);
   const [labelcodeLookupHint, setLabelcodeLookupHint] = useState<string | null>(null);
@@ -735,6 +737,71 @@ export function TagEditorModal({
     }
   }, [p7SearchSource, gvlLabelDb]);
 
+  const onBmgpmLookupClick = useCallback(async () => {
+    setBmgpmApiErr(null);
+    const src = p7SearchSource?.trim();
+    if (!src) return;
+    setBmgpmApiBusy(true);
+    try {
+      const partial = await lookupBmgpmTags(src);
+      setForm((prev) => {
+        const next = { ...prev };
+        const keys: (keyof TagFormFields)[] = [
+          "songTitle",
+          "artist",
+          "album",
+          "composer",
+          "isrc",
+        ];
+        for (const k of keys) {
+          const v = partial[k as keyof typeof partial];
+          if (typeof v === "string" && v.trim()) (next as Record<string, string>)[k] = v.trim();
+        }
+        const db = gvlLabelDb ?? loadGvlLabelDb();
+        const lc = partial.labelcode?.trim() ?? "";
+        let entry = lc ? findGvlEntryByLabelcode(db, lc) : undefined;
+        const lib = partial.label?.trim() ?? "";
+        if (!entry && lib) entry = findGvlEntryByLabel(db, lib);
+        if (entry) {
+          next.labelcode = entry.labelcode;
+          next.label = entry.label;
+          next.hersteller = partial.hersteller?.trim() || entry.hersteller;
+          next.gvlRechte = entry.rechterueckrufe;
+        } else if (lib) {
+          next.label = lib;
+          next.labelcode = lc;
+          next.hersteller = partial.hersteller?.trim() ?? "";
+          next.gvlRechte = "";
+        } else {
+          next.label = "";
+          next.hersteller = partial.hersteller?.trim() ?? "";
+          next.gvlRechte = "";
+        }
+        return next;
+      });
+      if (partial.warnung === true) {
+        setWarnToggle(true);
+      } else {
+        const db = gvlLabelDb ?? loadGvlLabelDb();
+        const lib = partial.label?.trim() ?? "";
+        const lc = partial.labelcode?.trim() ?? "";
+        const hit =
+          (lc && findGvlEntryByLabelcode(db, lc)) ||
+          (lib && findGvlEntryByLabel(db, lib)) ||
+          undefined;
+        if ((lc || lib) && !hit) setWarnToggle(true);
+        else if (hit) setWarnToggle(false);
+      }
+    } catch (e) {
+      setBmgpmApiErr(
+        e instanceof Error ? e.message : "Kein Katalog-Treffer — öffne BMG-Portal-Suche."
+      );
+      await openBmgPmSearchWithOptionalClipAsync(p7SearchSource);
+    } finally {
+      setBmgpmApiBusy(false);
+    }
+  }, [p7SearchSource, gvlLabelDb]);
+
   const setStandard = useCallback(
     (key: keyof TagFormFields) =>
       (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -1016,10 +1083,11 @@ export function TagEditorModal({
             <button
               type="button"
               className="btn-modal"
-              title={`${BMGPM_SEARCH_URL} — bei BMGPM_: Kennung nach dem ersten Unterstrich + erstes Wort des Titels (nach dem 3. Unterstrich) in die Zwischenablage, z. B. „LKY0123 RISE“.`}
-              onClick={() => void openBmgPmSearchWithOptionalClipAsync(p7SearchSource)}
+              disabled={bmgpmApiBusy}
+              title={`Zuerst BMGPM-Katalog (Musikverlage), sonst ${BMGPM_SEARCH_URL} — Dateiname/Katalogcode.`}
+              onClick={() => void onBmgpmLookupClick()}
             >
-              BMGPM
+              {bmgpmApiBusy ? "BMGPM …" : "BMGPM"}
             </button>
             <button
               type="button"
@@ -1123,6 +1191,11 @@ export function TagEditorModal({
             {wcpmApiErr ? (
               <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
                 {wcpmApiErr}
+              </p>
+            ) : null}
+            {bmgpmApiErr ? (
+              <p className="modal-lead modal-lead--muted tag-blankframe-api-err" role="alert">
+                {bmgpmApiErr}
               </p>
             ) : null}
             {sonotonMmdErr ? (

@@ -21,7 +21,7 @@ export const MUSIKVERLAGE_CATALOG = [
   {
     id: "bmgpm",
     label: "BMG Production Music",
-    hint: "BMGPM-Suche — wie Button im Tag-Editor.",
+    hint: "BMGPM-Katalog (.xlsx) hochladen → SQLite; Tag-Editor „BMGPM“: Treffer aus Katalog, sonst Portal-Suche.",
   },
   {
     id: "sonoton",
@@ -56,4 +56,11 @@ export const MUSIKVERLAG_IDS: MusikverlagId[] = MUSIKVERLAGE_CATALOG.map((x) => 
 
 export function isMusikverlagId(s: string): s is MusikverlagId {
   return (MUSIKVERLAG_IDS as string[]).includes(s);
+}
+
+/** Verlage mit Datenbank-Dialog (Filter, Bearbeiten, Tag-Lookup). */
+export const MUSIKVERLAGE_DB_IDS: MusikverlagId[] = ["wcpm", "bmgpm"];
+
+export function musikverlagHasDatabase(id: MusikverlagId): boolean {
+  return (MUSIKVERLAGE_DB_IDS as string[]).includes(id);
 }

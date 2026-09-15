@@ -19,8 +19,12 @@ import {
   type MusikverlageConfigFile,
 } from "./musikverlageFs";
 import {
+  bulkPatchMusikverlagDbRows,
   countRowsInMusikverlagDb,
+  deleteMusikverlagDbRows,
+  listMusikverlagDbRowKeys,
   listWcpmDbRows,
+  lookupBmgpmPayloadFromDb,
   lookupWcpmPayloadFromDb,
   musikverlagSqliteExists,
   rebuildMusikverlagTableDb,
@@ -204,7 +208,10 @@ export function createMusikverlageRouter(): Router {
             const pLower = p.toLowerCase();
             return pLower.endsWith(".xlsx") || pLower.endsWith(".xls") || pLower.endsWith(".csv");
           });
-          const { rowCount } = rebuildMusikverlagTableDb(id as MusikverlagId, excelPaths);
+          const { rowCount } = rebuildMusikverlagTableDb(id as MusikverlagId, excelPaths, {
+            uploadMode: mode,
+            appendSourcePath: dest,
+          });
           tableIndexedRowCount = rowCount;
         } catch (e) {
           await fs.unlink(dest).catch(() => {});
@@ -273,6 +280,7 @@ export function createMusikverlageRouter(): Router {
       const composer = typeof req.query.composer === "string" ? req.query.composer : "";
       const isrc = typeof req.query.isrc === "string" ? req.query.isrc : "";
       const labelcode = typeof req.query.labelcode === "string" ? req.query.labelcode : "";
+      const label = typeof req.query.label === "string" ? req.query.label : "";
       const warnRaw = typeof req.query.warnung === "string" ? req.query.warnung.trim() : "";
       const warnung = warnRaw === "1" ? true : warnRaw === "0" ? false : null;
       const anyFilter = [
@@ -283,6 +291,7 @@ export function createMusikverlageRouter(): Router {
         composer,
         isrc,
         labelcode,
+        label,
         warnRaw,
       ].some((s) => s.trim() !== "");
       if (!anyFilter) {
@@ -297,6 +306,7 @@ export function createMusikverlageRouter(): Router {
         composer,
         isrc,
         labelcode,
+        label,
         warnung,
       });
       res.json({ ok: true, rows: result.rows, total: result.total, filtered: true });
@@ -323,6 +333,8 @@ export function createMusikverlageRouter(): Router {
         composer?: string;
         isrc?: string;
         labelcode?: string;
+        label?: string;
+        hersteller?: string;
         warnung?: boolean;
       };
       const next = updateWcpmDbRow(id, decodeURIComponent(rowKey), {
@@ -332,6 +344,8 @@ export function createMusikverlageRouter(): Router {
         composer: body.composer,
         isrc: body.isrc,
         labelcode: body.labelcode,
+        label: body.label,
+        hersteller: body.hersteller,
         warnung: body.warnung,
       });
       res.json({ ok: true, payload: next });
@@ -341,6 +355,90 @@ export function createMusikverlageRouter(): Router {
       });
     }
   });
+
+  r.get("/admin/musikverlage/:id/database/keys", bearerAuth, requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) {
+      res.status(400).json({ error: "Fehlende ID." });
+      return;
+    }
+    try {
+      assertMusikverlagId(id);
+      const filenameStem = typeof req.query.filenameStem === "string" ? req.query.filenameStem : "";
+      const songTitle = typeof req.query.songTitle === "string" ? req.query.songTitle : "";
+      const artist = typeof req.query.artist === "string" ? req.query.artist : "";
+      const album = typeof req.query.album === "string" ? req.query.album : "";
+      const composer = typeof req.query.composer === "string" ? req.query.composer : "";
+      const isrc = typeof req.query.isrc === "string" ? req.query.isrc : "";
+      const labelcode = typeof req.query.labelcode === "string" ? req.query.labelcode : "";
+      const label = typeof req.query.label === "string" ? req.query.label : "";
+      const warnRaw = typeof req.query.warnung === "string" ? req.query.warnung.trim() : "";
+      const warnung = warnRaw === "1" ? true : warnRaw === "0" ? false : null;
+      const keys = listMusikverlagDbRowKeys(id, {
+        filenameStem,
+        songTitle,
+        artist,
+        album,
+        composer,
+        isrc,
+        labelcode,
+        label,
+        warnung,
+      });
+      res.json({ ok: true, keys, total: keys.length });
+    } catch (e) {
+      res.status(400).json({
+        error: e instanceof Error ? e.message : "Schlüssel konnten nicht geladen werden.",
+      });
+    }
+  });
+
+  r.post("/admin/musikverlage/:id/database/delete", bearerAuth, requireAdmin, async (req: Request, res: Response) => {
+    const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    if (!id) {
+      res.status(400).json({ error: "Fehlende ID." });
+      return;
+    }
+    try {
+      assertMusikverlagId(id);
+      const body = req.body as { rowKeys?: string[] };
+      const rowKeys = Array.isArray(body.rowKeys) ? body.rowKeys : [];
+      const deleted = deleteMusikverlagDbRows(id, rowKeys);
+      res.json({ ok: true, deleted });
+    } catch (e) {
+      res.status(400).json({
+        error: e instanceof Error ? e.message : "Löschen fehlgeschlagen.",
+      });
+    }
+  });
+
+  r.post(
+    "/admin/musikverlage/:id/database/bulk-patch",
+    bearerAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (!id) {
+        res.status(400).json({ error: "Fehlende ID." });
+        return;
+      }
+      try {
+        assertMusikverlagId(id);
+        const body = req.body as {
+          rowKeys?: string[];
+          patch?: { labelcode?: string; label?: string; hersteller?: string; warnung?: boolean | null };
+        };
+        const rowKeys = Array.isArray(body.rowKeys) ? body.rowKeys : [];
+        const patch = body.patch ?? {};
+        const updated = bulkPatchMusikverlagDbRows(id, rowKeys, patch);
+        res.json({ ok: true, updated });
+      } catch (e) {
+        res.status(400).json({
+          error: e instanceof Error ? e.message : "Massenbearbeitung fehlgeschlagen.",
+        });
+      }
+    }
+  );
 
   /**
    * WCPM-Excel (Verwaltung → Musikverlage → WCPM): Zeile per Dateiname (Spalte FILENAME; .wav/.mp3 egal).
@@ -390,6 +488,54 @@ export function createMusikverlageRouter(): Router {
       console.error("[musikverlage] wcpm lookup", e);
       res.status(500).json({
         error: e instanceof Error ? e.message : "WCPM-Suche fehlgeschlagen.",
+      });
+    }
+  });
+
+  r.post("/musikverlage/bmgpm/lookup", bearerAuth, async (req: Request, res: Response) => {
+    const body = req.body as { fileName?: string };
+    const fileName = typeof body.fileName === "string" ? body.fileName.trim() : "";
+    if (!fileName) {
+      res.status(400).json({ error: "fileName fehlt." });
+      return;
+    }
+    if (!musikverlagSqliteExists("bmgpm")) {
+      const tablePath = await findAnyUploadFile("bmgpm");
+      if (tablePath) {
+        try {
+          const allPaths = await listUploadFiles("bmgpm");
+          rebuildMusikverlagTableDb("bmgpm", allPaths.length ? allPaths : tablePath);
+        } catch (e) {
+          console.error("[musikverlage] bmgpm db rebuild", e);
+          res.status(500).json({
+            error:
+              e instanceof Error
+                ? e.message
+                : "BMGPM-Datenbank konnte nicht aus der Excel-Datei erzeugt werden.",
+          });
+          return;
+        }
+      }
+    }
+    if (!musikverlagSqliteExists("bmgpm")) {
+      res.status(404).json({
+        error: "Keine BMGPM-Katalogtabelle hochgeladen (Verwaltung → Musikverlage).",
+      });
+      return;
+    }
+    try {
+      const payload = lookupBmgpmPayloadFromDb(fileName);
+      if (!payload) {
+        res.status(404).json({
+          error: "Kein Treffer für diesen Dateinamen in der BMGPM-Katalogtabelle.",
+        });
+        return;
+      }
+      res.json({ ok: true, payload });
+    } catch (e) {
+      console.error("[musikverlage] bmgpm lookup", e);
+      res.status(500).json({
+        error: e instanceof Error ? e.message : "BMGPM-Suche fehlgeschlagen.",
       });
     }
   });

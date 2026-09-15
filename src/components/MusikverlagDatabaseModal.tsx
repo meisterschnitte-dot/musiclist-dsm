@@ -7,15 +7,18 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
+  fetchMusikverlagDatabaseRowKeys,
   fetchMusikverlagDatabaseRows,
   updateMusikverlagDatabaseRow,
   type WcpmDbFilters,
   type WcpmDbRowDto,
 } from "../api/musikverlageApi";
 import { DebouncedSearchInput } from "./DebouncedSearchInput";
+import { MusikverlagBulkEditModal } from "./MusikverlagBulkEditModal";
 import type { MusikverlagId } from "../musikverlage/musikverlageCatalog";
 import { startColumnResizeDrag } from "../tableColResizeDrag";
 import {
+  findGvlEntryByLabel,
   findGvlEntryByLabelcode,
   loadGvlLabelDb,
   loadGvlLabelDbFromIdb,
@@ -37,6 +40,7 @@ const EMPTY_FILTERS: WcpmDbFilters = {
   composer: "",
   isrc: "",
   labelcode: "",
+  label: "",
   warnung: "",
 };
 
@@ -44,8 +48,8 @@ function anyFilterActive(f: WcpmDbFilters): boolean {
   return Object.values(f).some((v) => String(v).trim() !== "");
 }
 
-const COL_DEFAULT_WIDTHS = [220, 180, 170, 170, 160, 130, 120, 170, 190, 95, 110] as const;
-const COL_MIN_WIDTHS = [120, 120, 120, 120, 120, 90, 90, 120, 130, 80, 90] as const;
+const COL_DEFAULT_WIDTHS = [44, 220, 180, 170, 170, 160, 130, 120, 170, 190, 95, 110] as const;
+const COL_MIN_WIDTHS = [40, 120, 120, 120, 120, 120, 90, 90, 120, 130, 80, 90] as const;
 
 function minForCol(colIndex: number): number {
   return COL_MIN_WIDTHS[colIndex] ?? 80;
@@ -60,6 +64,9 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saveBusyKey, setSaveBusyKey] = useState<string | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set());
+  const [selectAllBusy, setSelectAllBusy] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [gvlDb, setGvlDb] = useState<GvlLabelDb | null>(() => loadGvlLabelDb());
   const [colWidths, setColWidths] = useState<number[]>(() => [...COL_DEFAULT_WIDTHS]);
   const filterActive = useMemo(() => anyFilterActive(filters), [filters]);
@@ -121,17 +128,49 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
 
   useEffect(() => {
     if (!open || !verlagId) return;
+    setSelectedKeys(new Set());
     void onSearch(filters);
   }, [open, verlagId, filters, onSearch]);
+
+  const onToggleRow = useCallback((key: string, checked: boolean) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
+
+  const onSelectAllFiltered = useCallback(async () => {
+    if (!verlagId || !filterActive) return;
+    if (selectedKeys.size > 0 && selectedKeys.size >= total && total > 0) {
+      setSelectedKeys(new Set());
+      return;
+    }
+    setSelectAllBusy(true);
+    try {
+      const data = await fetchMusikverlagDatabaseRowKeys(verlagId, filters);
+      setSelectedKeys(new Set(data.keys));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Auswahl konnte nicht geladen werden.");
+    } finally {
+      setSelectAllBusy(false);
+    }
+  }, [filterActive, filters, selectedKeys.size, total, verlagId]);
 
   const rowsView = useMemo<RowView[]>(() => {
     return rows.map((r) => {
       const code = (r.payload.labelcode ?? "").trim();
-      const hit = code ? findGvlEntryByLabelcode(gvlDb, code) : undefined;
+      const hitByCode = code ? findGvlEntryByLabelcode(gvlDb, code) : undefined;
+      const storedLabel = (r.payload.label ?? "").trim();
+      const hitByLabel = !hitByCode && storedLabel ? findGvlEntryByLabel(gvlDb, storedLabel) : undefined;
+      const hit = hitByCode ?? hitByLabel;
+      const gvlLabel = (r.payload.label ?? "").trim() || hit?.label || "";
+      const gvlHersteller = (r.payload.hersteller ?? "").trim() || hit?.hersteller || "";
       return {
         ...r,
-        gvlLabel: hit?.label ?? "",
-        gvlHersteller: hit?.hersteller ?? "",
+        gvlLabel,
+        gvlHersteller,
       };
     });
   }, [rows, gvlDb]);
@@ -229,6 +268,16 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
             {err}
           </p>
         ) : null}
+        <div className="modal-actions modal-actions--tag" style={{ marginBottom: "0.5rem" }}>
+          <button
+            type="button"
+            className="btn-modal primary"
+            disabled={!filterActive || selectedKeys.size === 0}
+            onClick={() => setBulkEditOpen(true)}
+          >
+            Bearbeiten ({selectedKeys.size.toLocaleString("de-DE")})
+          </button>
+        </div>
         <div className="sys-settings-table-wrap">
           <table className="table-dense table-resizable sys-settings-table">
             <colgroup ref={colGroupRef}>
@@ -238,49 +287,59 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
             </colgroup>
             <thead>
               <tr>
-                <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Dateiname (Stamm)
-                  <span className="table-col-resize-handle" onMouseDown={attachResize(0)} />
+                <th scope="col" aria-label="Auswahl">
+                  <input
+                    type="checkbox"
+                    disabled={!filterActive || selectAllBusy || total === 0}
+                    checked={filterActive && total > 0 && selectedKeys.size >= total}
+                    title="Alle gefilterten Einträge auswählen"
+                    onChange={() => void onSelectAllFiltered()}
+                  />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Songtitel
+                  Dateiname (Stamm)
                   <span className="table-col-resize-handle" onMouseDown={attachResize(1)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Interpret
+                  Songtitel
                   <span className="table-col-resize-handle" onMouseDown={attachResize(2)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Album
+                  Interpret
                   <span className="table-col-resize-handle" onMouseDown={attachResize(3)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Komponist
+                  Album
                   <span className="table-col-resize-handle" onMouseDown={attachResize(4)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  ISRC
+                  Komponist
                   <span className="table-col-resize-handle" onMouseDown={attachResize(5)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Labelcode
+                  ISRC
                   <span className="table-col-resize-handle" onMouseDown={attachResize(6)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Label (GVL)
+                  Labelcode
                   <span className="table-col-resize-handle" onMouseDown={attachResize(7)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Hersteller (GVL)
+                  Label (GVL)
                   <span className="table-col-resize-handle" onMouseDown={attachResize(8)} />
                 </th>
                 <th className="table-th-resizable table-th-with-filter" scope="col">
-                  Warnung
+                  Hersteller (GVL)
                   <span className="table-col-resize-handle" onMouseDown={attachResize(9)} />
+                </th>
+                <th className="table-th-resizable table-th-with-filter" scope="col">
+                  Warnung
+                  <span className="table-col-resize-handle" onMouseDown={attachResize(10)} />
                 </th>
                 <th scope="col">Aktion</th>
               </tr>
               <tr>
+                <th />
                 <th>
                   <DebouncedSearchInput
                     type="search"
@@ -345,7 +404,13 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
                   />
                 </th>
                 <th>
-                  <div className="table-col-filter-input" aria-hidden />
+                  <DebouncedSearchInput
+                    type="search"
+                    className="table-col-filter-input"
+                    value={filters.label}
+                    onChange={(v) => setFilters((p) => ({ ...p, label: v }))}
+                    placeholder="Label …"
+                  />
                 </th>
                 <th>
                   <div className="table-col-filter-input" aria-hidden />
@@ -378,21 +443,30 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
             <tbody>
               {!filterActive ? (
                 <tr>
-                  <td colSpan={11} className="sys-settings-no-hits sys-settings-no-hits--idle">
+                  <td colSpan={12} className="sys-settings-no-hits sys-settings-no-hits--idle">
                     Bitte zuerst Filter setzen.
                   </td>
                 </tr>
               ) : rowsView.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="sys-settings-no-hits">
+                  <td colSpan={12} className="sys-settings-no-hits">
                     Keine Treffer.
                   </td>
                 </tr>
               ) : (
                 rowsView.map((r) => {
                   const saving = saveBusyKey === r.filenameStem;
+                  const checked = selectedKeys.has(r.filenameStem);
                   return (
                     <tr key={r.filenameStem}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          aria-label={`Eintrag ${r.filenameStem} auswählen`}
+                          onChange={(e) => onToggleRow(r.filenameStem, e.target.checked)}
+                        />
+                      </td>
                       <td className="mono-cell">{r.filenameStem}</td>
                       <td>
                         <input
@@ -485,6 +559,17 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
           </button>
         </div>
       </div>
+      <MusikverlagBulkEditModal
+        open={bulkEditOpen}
+        verlagId={verlagId}
+        verlagLabel={verlagLabel}
+        rowKeys={[...selectedKeys]}
+        onClose={() => setBulkEditOpen(false)}
+        onDone={() => {
+          setSelectedKeys(new Set());
+          void onSearch(filters);
+        }}
+      />
     </div>
   );
 }

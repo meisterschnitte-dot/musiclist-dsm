@@ -139,6 +139,13 @@ export type WcpmTagPayload = {
   labelcode: string;
   /** Manuelle Warnung aus Musikverlage-Datenbank (wie Tag-Editor-Checkbox). */
   warnung?: boolean;
+  /** BMGPM: Library-Name; manuelle Overrides in der Datenbank. */
+  label?: string;
+  hersteller?: string;
+  albumCode?: string;
+  releaseDate?: string;
+  trackAudioFilename?: string;
+  albumDisplayTitle?: string;
 };
 
 /** Eine Datenzeile (ohne Kopfzeile) in Tag-Felder übersetzen. */
