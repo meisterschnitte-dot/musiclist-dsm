@@ -158,7 +158,8 @@ export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
     find(["library:name", "library name", "catalog:name", "catalog name"]) ??
     find([], (x) => /^library[.:]name/.test(x) || x === "catalog");
   const isrcIdx =
-    find(["track:isrc", "isrc", "track isrc"]) ?? find([], (x) => x === "isrc" || /track[.:]isrc/.test(x));
+    find(["track:isrc", "isrc", "track isrc", "code:isrc", "code isrc"]) ??
+    find([], (x) => x === "isrc" || /track[.:]isrc/.test(x) || /code[.:]isrc/.test(x));
 
   if (
     trackAudioFilenameIdx == null &&

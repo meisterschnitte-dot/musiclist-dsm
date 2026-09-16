@@ -11,6 +11,7 @@ import {
   formatBmgpmHeaderPreview,
   parseBmgpmHeaderRow,
   parseBmgpmReleaseDate,
+  type BmgpmHeaderMap,
 } from "../src/musikverlage/bmgpmTable";
 import {
   parseWcpmHeaderRow,
@@ -30,6 +31,7 @@ import { getDataDir } from "./userStore";
 
 const requireXlsx = createRequire(import.meta.url);
 const XLSX = requireXlsx("xlsx") as typeof import("xlsx");
+const ExcelJS = requireXlsx("exceljs") as typeof import("exceljs");
 
 const DB_DIR = () => path.join(getDataDir(), "musikverlage", "db");
 
@@ -116,11 +118,11 @@ export type RebuildMusikverlagDbResult = { rowCount: number };
  * Liest die Excel-Datei ein und legt/ersetzt die SQLite-Zuordnung für diesen Verlag.
  * WCPM: indizierte Suchtabelle; sonst: Rohzeilen der ersten Tabelle für spätere Auswertung.
  */
-export function rebuildMusikverlagTableDb(
+export async function rebuildMusikverlagTableDb(
   id: MusikverlagId,
   excelPathOrPaths: string | string[],
   options?: RebuildMusikverlagDbOptions
-): RebuildMusikverlagDbResult {
+): Promise<RebuildMusikverlagDbResult> {
   const excelPaths = Array.isArray(excelPathOrPaths) ? excelPathOrPaths : [excelPathOrPaths];
   if (excelPaths.length === 0) throw new Error("Keine Excel-Datei angegeben.");
   fs.mkdirSync(DB_DIR(), { recursive: true });
@@ -136,7 +138,7 @@ export function rebuildMusikverlagTableDb(
       return rebuildWcpmDb(excelPaths, id);
     }
     if (id === "bmgpm") {
-      return rebuildBmgpmDb(excelPaths, id);
+      return await rebuildBmgpmDb(excelPaths, id);
     }
     return rebuildGenericExcelDb(excelPaths, id);
   } catch (e) {
@@ -167,7 +169,12 @@ function readFirstSheetRows(excelPath: string): { sheetName: string; rows: unkno
       sheetName = name;
     }
   }
-  if (!bestRows.length) throw new Error("Excel-Datei enthält keine Tabelle.");
+  if (!bestRows.length) {
+    throw new Error(
+      `Excel-Datei enthält keine lesbaren Zeilen (${path.basename(excelPath)}). ` +
+        "Sehr große .xlsx-Dateien bitte als BMGPM-Katalog hochladen (Streaming-Import)."
+    );
+  }
   return { sheetName, rows: bestRows };
 }
 
@@ -276,13 +283,65 @@ function createBmgpmDbSchema(db: InstanceType<typeof Database>): void {
   `);
 }
 
-function ingestBmgpmExcelPath(
-  _db: InstanceType<typeof Database>,
+type BmgpmInsertBatchItem = { rowKey: string; release: string | null; payloadJson: string };
+
+function exceljsCellToUnknown(v: unknown): unknown {
+  if (v == null) return "";
+  if (v instanceof Date) return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "string") return v;
+  if (typeof v === "object") {
+    const o = v as {
+      text?: string;
+      richText?: { text?: string }[];
+      result?: unknown;
+      hyperlink?: string;
+    };
+    if (typeof o.text === "string") return o.text;
+    if (Array.isArray(o.richText)) return o.richText.map((x) => x.text ?? "").join("");
+    if (o.result != null) return exceljsCellToUnknown(o.result);
+    if (typeof o.hyperlink === "string") return o.hyperlink;
+  }
+  return String(v);
+}
+
+function exceljsRowToArray(row: { values: unknown }): unknown[] {
+  const vals = row.values;
+  if (!Array.isArray(vals)) return [];
+  const out: unknown[] = [];
+  for (let i = 1; i < vals.length; i++) {
+    out[i - 1] = exceljsCellToUnknown(vals[i]);
+  }
+  return out;
+}
+
+function bmgpmRowToInsertItem(
+  headerMap: BmgpmHeaderMap,
+  row: unknown[],
+  minReleaseExclusive: string | null
+): BmgpmInsertBatchItem | null {
+  if (!Array.isArray(row) || row.length === 0) return null;
+  const rowKey = bmgpmRowKeyFromRow(headerMap, row);
+  if (!rowKey) return null;
+  const payload = bmgpmRowToTagPayload(headerMap, row);
+  if (!payload) return null;
+  const release =
+    payload.releaseDate ??
+    (headerMap.albumReleaseDateIdx != null ? parseBmgpmReleaseDate(row[headerMap.albumReleaseDateIdx]) : null);
+  if (release) payload.releaseDate = release;
+  if (minReleaseExclusive && release) {
+    if (release <= minReleaseExclusive) return null;
+  } else if (minReleaseExclusive && !release) {
+    return null;
+  }
+  return { rowKey: rowKey.toLowerCase(), release: release ?? null, payloadJson: JSON.stringify(payload) };
+}
+
+function ingestBmgpmRowsArray(
+  rows: unknown[][],
   excelPath: string,
-  ins: { run: (...args: unknown[]) => unknown },
+  onItem: (item: BmgpmInsertBatchItem) => void,
   minReleaseExclusive: string | null
 ): number {
-  const { rows } = readFirstSheetRows(excelPath);
   if (!rows.length) {
     throw new Error(`BMGPM-Tabelle ist leer: ${path.basename(excelPath)}`);
   }
@@ -299,24 +358,9 @@ function ingestBmgpmExcelPath(
   const headerMap = parseBmgpmHeaderRow(rows[headerRowIdx]!)!;
   let n = 0;
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!Array.isArray(row) || row.length === 0) continue;
-    const rowKey = bmgpmRowKeyFromRow(headerMap, row);
-    if (!rowKey) continue;
-    const payload = bmgpmRowToTagPayload(headerMap, row);
-    if (!payload) continue;
-    const release =
-      payload.releaseDate ??
-      (headerMap.albumReleaseDateIdx != null
-        ? parseBmgpmReleaseDate(row[headerMap.albumReleaseDateIdx])
-        : null);
-    if (release) payload.releaseDate = release;
-    if (minReleaseExclusive && release) {
-      if (release <= minReleaseExclusive) continue;
-    } else if (minReleaseExclusive && !release) {
-      continue;
-    }
-    ins.run(rowKey.toLowerCase(), release ?? null, JSON.stringify(payload));
+    const item = bmgpmRowToInsertItem(headerMap, rows[r]!, minReleaseExclusive);
+    if (!item) continue;
+    onItem(item);
     n++;
   }
   if (n === 0 && !minReleaseExclusive) {
@@ -328,23 +372,132 @@ function ingestBmgpmExcelPath(
   return n;
 }
 
-function rebuildBmgpmDb(excelPaths: string[], id: MusikverlagId): RebuildMusikverlagDbResult {
+async function ingestBmgpmExcelPathStreaming(
+  excelPath: string,
+  onItem: (item: BmgpmInsertBatchItem) => void,
+  minReleaseExclusive: string | null
+): Promise<number> {
+  const ext = path.extname(excelPath).toLowerCase();
+  if (ext === ".csv") {
+    return ingestBmgpmRowsArray(readCsvRows(excelPath), excelPath, onItem, minReleaseExclusive);
+  }
+
+  const stream = fs.createReadStream(excelPath);
+  const reader = new ExcelJS.stream.xlsx.WorkbookReader(stream, {
+    entries: "emit",
+    sharedStrings: "cache",
+    hyperlinks: "ignore",
+    styles: "ignore",
+    worksheets: "emit",
+  });
+
+  let headerMap: BmgpmHeaderMap | null = null;
+  const headerBuffer: unknown[][] = [];
+  let n = 0;
+  let dataRows = 0;
+  let sheets = 0;
+
+  try {
+    for await (const worksheetReader of reader) {
+      sheets++;
+      if (sheets > 1) break;
+      for await (const excelRow of worksheetReader) {
+        const row = exceljsRowToArray(excelRow);
+        if (!headerMap) {
+          headerBuffer.push(row);
+          const idx = findBmgpmHeaderRowIndex(headerBuffer);
+          if (idx != null) {
+            headerMap = parseBmgpmHeaderRow(headerBuffer[idx]!)!;
+            for (let r = idx + 1; r < headerBuffer.length; r++) {
+              const item = bmgpmRowToInsertItem(headerMap, headerBuffer[r]!, minReleaseExclusive);
+              if (!item) continue;
+              onItem(item);
+              n++;
+              dataRows++;
+            }
+            headerBuffer.length = 0;
+          } else if (headerBuffer.length >= 120) {
+            const preview = headerBuffer
+              .slice(0, 3)
+              .map((h, i) => `Zeile ${i + 1}: ${formatBmgpmHeaderPreview(h)}`)
+              .join(" · ");
+            throw new Error(
+              `BMGPM-Kopfzeile nicht erkannt (${path.basename(excelPath)}). Erwartet u. a. „Track: Audio Filename“ oder „Album: Code“. ${preview}`
+            );
+          }
+          continue;
+        }
+        dataRows++;
+        const item = bmgpmRowToInsertItem(headerMap, row, minReleaseExclusive);
+        if (!item) continue;
+        onItem(item);
+        n++;
+      }
+    }
+  } finally {
+    stream.destroy();
+  }
+
+  if (!headerMap) {
+    const preview = headerBuffer
+      .slice(0, 3)
+      .map((h, i) => `Zeile ${i + 1}: ${formatBmgpmHeaderPreview(h)}`)
+      .join(" · ");
+    throw new Error(
+      `BMGPM-Kopfzeile nicht erkannt (${path.basename(excelPath)}, ${dataRows.toLocaleString("de-DE")} Zeilen gelesen). ${preview || "Datei leer oder nicht lesbar."}`
+    );
+  }
+  if (n === 0 && !minReleaseExclusive) {
+    throw new Error(
+      `BMGPM: 0 Zeilen importiert (${path.basename(excelPath)}, ${dataRows.toLocaleString("de-DE")} Datenzeilen). Spalten „Track: Audio Filename“ / „Album: Code“ prüfen.`
+    );
+  }
+  return n;
+}
+
+function createBmgpmInserter(db: InstanceType<typeof Database>): {
+  push: (item: BmgpmInsertBatchItem) => void;
+  flush: () => void;
+} {
+  const ins = db.prepare(
+    `INSERT OR REPLACE INTO bmgpm_tracks (row_key, release_date, payload_json) VALUES (?, ?, ?)`
+  );
+  const insertBatch = db.transaction((batch: BmgpmInsertBatchItem[]) => {
+    for (const item of batch) {
+      ins.run(item.rowKey, item.release, item.payloadJson);
+    }
+  });
+  let batch: BmgpmInsertBatchItem[] = [];
+  return {
+    push(item) {
+      batch.push(item);
+      if (batch.length >= 2000) {
+        insertBatch(batch);
+        batch = [];
+      }
+    },
+    flush() {
+      if (batch.length) {
+        insertBatch(batch);
+        batch = [];
+      }
+    },
+  };
+}
+
+async function rebuildBmgpmDb(excelPaths: string[], id: MusikverlagId): Promise<RebuildMusikverlagDbResult> {
   const dbPath = sqlitePathForMusikverlag(id);
   const db = new Database(dbPath);
   try {
     createBmgpmDbSchema(db);
-    const ins = db.prepare(
-      `INSERT OR REPLACE INTO bmgpm_tracks (row_key, release_date, payload_json) VALUES (?, ?, ?)`
-    );
-    const insertAll = db.transaction((): number => {
-      let n = 0;
-      for (const excelPath of excelPaths) {
-        n += ingestBmgpmExcelPath(db, excelPath, ins, null);
-      }
-      return n;
-    });
-    const rowCount = insertAll();
-    return { rowCount };
+    db.pragma("synchronous = NORMAL");
+    const inserter = createBmgpmInserter(db);
+    let n = 0;
+    for (const excelPath of excelPaths) {
+      n += await ingestBmgpmExcelPathStreaming(excelPath, (item) => inserter.push(item), null);
+    }
+    inserter.flush();
+    return { rowCount: n };
   } finally {
     checkpointAndClose(db);
   }
@@ -359,29 +512,30 @@ function maxBmgpmReleaseDateInDb(db: InstanceType<typeof Database>): string | nu
   return row?.m?.trim() || null;
 }
 
-function appendBmgpmFromExcel(excelPath: string): RebuildMusikverlagDbResult {
+async function appendBmgpmFromExcel(excelPath: string): Promise<RebuildMusikverlagDbResult> {
   const id: MusikverlagId = "bmgpm";
   const dbPath = sqlitePathForMusikverlag(id);
   const db = new Database(dbPath);
+  let handedOff = false;
   try {
     const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
     if (fmt?.v !== "bmgpm_v1") {
       checkpointAndClose(db);
+      handedOff = true;
       removeMusikverlagSqliteDb(id);
       return rebuildBmgpmDb([excelPath], id);
     }
     const maxDate = maxBmgpmReleaseDateInDb(db);
-    const ins = db.prepare(
-      `INSERT OR REPLACE INTO bmgpm_tracks (row_key, release_date, payload_json) VALUES (?, ?, ?)`
+    const inserter = createBmgpmInserter(db);
+    const rowCount = await ingestBmgpmExcelPathStreaming(
+      excelPath,
+      (item) => inserter.push(item),
+      maxDate
     );
-    const rowCount = ingestBmgpmExcelPath(db, excelPath, ins, maxDate);
+    inserter.flush();
     return { rowCount };
   } finally {
-    try {
-      checkpointAndClose(db);
-    } catch {
-      /* bereits geschlossen beim Format-Mismatch */
-    }
+    if (!handedOff) checkpointAndClose(db);
   }
 }
 

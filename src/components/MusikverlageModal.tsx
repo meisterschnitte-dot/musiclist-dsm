@@ -181,7 +181,7 @@ export function MusikverlageModal({ open, onClose }: Props) {
               await sleep(2000);
               tick = Math.min(90, tick + 3);
               setImportProgress({
-                label: "Datenbank wird erzeugt (große Katalogdatei, bitte warten) …",
+                label: "Datenbank wird erzeugt (große BMGPM-Katalogdatei, bitte einige Minuten warten) …",
                 progress: tick,
               });
               const fresh = await fetchMusikverlageState();

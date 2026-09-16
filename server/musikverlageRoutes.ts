@@ -59,7 +59,7 @@ function startMusikverlagRebuildJob(id: MusikverlagId): Promise<void> {
     if (excelPaths.length === 0) {
       throw new Error("Keine importierte Tabelle auf dem Server — bitte zuerst hochladen.");
     }
-    const { rowCount } = rebuildMusikverlagTableDb(id, excelPaths, { uploadMode: "replace" });
+    const { rowCount } = await rebuildMusikverlagTableDb(id, excelPaths, { uploadMode: "replace" });
     if (!musikverlagSqliteExists(id)) {
       throw new Error("Datenbank-Datei wurde nach dem Import nicht gefunden (Server-Speicherpfad prüfen).");
     }
@@ -133,8 +133,9 @@ export function createMusikverlageRouter(): Router {
         const uploadList = Array.isArray(st?.xlsxFiles) ? st.xlsxFiles : [];
         const latest = uploadList.length > 0 ? uploadList[uploadList.length - 1]! : null;
         const diskDb = musikverlagSqliteExists(id);
-        const counted = diskDb ? countRowsInMusikverlagDb(id) : null;
-        const hasTableDb = diskDb;
+        const building = st?.tableDbBuildStatus === "running";
+        const counted = diskDb && !building ? countRowsInMusikverlagDb(id) : null;
+        const hasTableDb = diskDb && !building;
         const tableDbRowCount = hasTableDb
           ? counted ?? (typeof st?.tableDbRowCount === "number" ? st.tableDbRowCount : 0)
           : null;
@@ -146,11 +147,13 @@ export function createMusikverlageRouter(): Router {
               : [];
         const dbCapable = id === "wcpm" || id === "bmgpm";
         const hasFilesOnDisk = files.length > 0;
-        const tableDbBuildStatus: "running" | "ok" | "error" | null = hasTableDb
-          ? "ok"
-          : st?.tableDbBuildStatus === "running" || st?.tableDbBuildStatus === "error"
-            ? st.tableDbBuildStatus
-            : null;
+        const tableDbBuildStatus: "running" | "ok" | "error" | null = building
+          ? "running"
+          : hasTableDb
+            ? "ok"
+            : st?.tableDbBuildStatus === "error"
+              ? "error"
+              : null;
         entries[id] = {
           apiBaseUrl: typeof st?.apiBaseUrl === "string" ? st.apiBaseUrl : "",
           xlsxFileName: latest?.originalFileName ?? st?.xlsxFileName ?? null,
@@ -283,7 +286,7 @@ export function createMusikverlageRouter(): Router {
             const pLower = p.toLowerCase();
             return pLower.endsWith(".xlsx") || pLower.endsWith(".xls") || pLower.endsWith(".csv");
           });
-          const { rowCount } = rebuildMusikverlagTableDb(id as MusikverlagId, excelPaths, {
+          const { rowCount } = await rebuildMusikverlagTableDb(id as MusikverlagId, excelPaths, {
             uploadMode: mode,
             appendSourcePath: dest,
           });
@@ -614,7 +617,7 @@ export function createMusikverlageRouter(): Router {
       if (tablePath) {
         try {
           const allPaths = await listUploadFiles("wcpm");
-          rebuildMusikverlagTableDb("wcpm", allPaths.length ? allPaths : tablePath);
+          await rebuildMusikverlagTableDb("wcpm", allPaths.length ? allPaths : tablePath);
         } catch (e) {
           console.error("[musikverlage] wcpm db rebuild", e);
           res.status(500).json({
@@ -662,7 +665,7 @@ export function createMusikverlageRouter(): Router {
       if (tablePath) {
         try {
           const allPaths = await listUploadFiles("bmgpm");
-          rebuildMusikverlagTableDb("bmgpm", allPaths.length ? allPaths : tablePath);
+          await rebuildMusikverlagTableDb("bmgpm", allPaths.length ? allPaths : tablePath);
         } catch (e) {
           console.error("[musikverlage] bmgpm db rebuild", e);
           res.status(500).json({
