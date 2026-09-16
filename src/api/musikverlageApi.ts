@@ -30,7 +30,7 @@ export type MusikverlageEntryDto = {
 
 export async function rebuildMusikverlagDatabase(
   id: MusikverlagId
-): Promise<{ tableIndexedRowCount: number }> {
+): Promise<{ tableIndexedRowCount: number; hasTableDb: boolean }> {
   const t = getUsersApiToken();
   if (!t) throw new Error("Nicht angemeldet.");
   const res = await fetch(`${API}/admin/musikverlage/${encodeURIComponent(id)}/database/rebuild`, {
@@ -38,8 +38,11 @@ export async function rebuildMusikverlagDatabase(
     headers: { Authorization: `Bearer ${t}` },
   });
   if (!res.ok) throw new Error(await parseError(res));
-  const data = (await res.json()) as { tableIndexedRowCount?: number };
-  return { tableIndexedRowCount: data.tableIndexedRowCount ?? 0 };
+  const data = (await res.json()) as { tableIndexedRowCount?: number; hasTableDb?: boolean };
+  return {
+    tableIndexedRowCount: data.tableIndexedRowCount ?? 0,
+    hasTableDb: data.hasTableDb === true,
+  };
 }
 
 export type MusikverlageStateResponse = {

@@ -86,16 +86,21 @@ export function createMusikverlageRouter(): Router {
               ? [st.xlsxFileName]
               : [];
         const dbCapable = id === "wcpm" || id === "bmgpm";
+        const hasFilesOnDisk = files.length > 0;
         entries[id] = {
           apiBaseUrl: typeof st?.apiBaseUrl === "string" ? st.apiBaseUrl : "",
           xlsxFileName: latest?.originalFileName ?? st?.xlsxFileName ?? null,
           xlsxUploadedAtIso: latest?.uploadedAtIso ?? st?.xlsxUploadedAtIso ?? null,
-          xlsxFileCount: uploadList.length || files.length,
-          xlsxFileNames: fileNames,
-          hasFile: onDisk,
+          xlsxFileCount: hasFilesOnDisk ? files.length : uploadList.length,
+          xlsxFileNames: hasFilesOnDisk
+            ? uploadList.length
+              ? uploadList.map((x) => x.originalFileName)
+              : files.map((p) => path.basename(p))
+            : fileNames,
+          hasFile: hasFilesOnDisk,
           hasTableDb,
           tableDbRowCount: hasTableDb ? countRowsInMusikverlagDb(id) : null,
-          canOpenDatabase: dbCapable && (onDisk || hasTableDb),
+          canOpenDatabase: dbCapable && (hasFilesOnDisk || hasTableDb),
         };
       }
       res.json({
@@ -218,10 +223,15 @@ export function createMusikverlageRouter(): Router {
           });
           tableIndexedRowCount = rowCount;
         } catch (e) {
-          await fs.unlink(dest).catch(() => {});
-          cfg.entries[id as MusikverlagId] = prev;
-          await writeMusikverlageConfig(cfg);
-          throw e;
+          removeMusikverlagSqliteDb(id as MusikverlagId);
+          const msg = e instanceof Error ? e.message : String(e);
+          res.status(422).json({
+            error: `${msg} Die importierte Datei bleibt auf dem Server — „Datenbank“ erneut versuchen oder Fehlermeldung prüfen.`,
+            fileKept: true,
+            hasFile: (await listUploadFiles(id as MusikverlagId)).length > 0,
+            hasTableDb: musikverlagSqliteExists(id as MusikverlagId),
+          });
+          return;
         }
         res.json({
           ok: true,
@@ -230,6 +240,7 @@ export function createMusikverlageRouter(): Router {
           xlsxUploadedAtIso: now,
           xlsxFileCount: cfg.entries[id as MusikverlagId]!.xlsxFiles?.length ?? 1,
           tableIndexedRowCount,
+          hasTableDb: musikverlagSqliteExists(id as MusikverlagId),
         });
       } catch (e) {
         console.error("[musikverlage] upload", e);
@@ -296,7 +307,14 @@ export function createMusikverlageRouter(): Router {
         const { rowCount } = rebuildMusikverlagTableDb(id as MusikverlagId, excelPaths, {
           uploadMode: "replace",
         });
-        res.json({ ok: true, tableIndexedRowCount: rowCount });
+        const hasTableDb = musikverlagSqliteExists(id as MusikverlagId);
+        if (!hasTableDb) {
+          res.status(500).json({
+            error: "Datenbank-Datei wurde nach dem Import nicht gefunden (Server-Speicherpfad prüfen).",
+          });
+          return;
+        }
+        res.json({ ok: true, tableIndexedRowCount: rowCount, hasTableDb: true, hasFile: true });
       } catch (e) {
         console.error("[musikverlage] rebuild-db", e);
         res.status(500).json({

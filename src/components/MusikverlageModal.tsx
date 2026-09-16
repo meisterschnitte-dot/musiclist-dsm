@@ -137,6 +137,7 @@ export function MusikverlageModal({ open, onClose }: Props) {
       } catch (e) {
         setSuccessMsg(null);
         setErr(e instanceof Error ? e.message : "Upload fehlgeschlagen.");
+        await reload();
       } finally {
         setImportProgress(null);
         setUploadBusyId(null);
@@ -164,12 +165,22 @@ export function MusikverlageModal({ open, onClose }: Props) {
         });
         try {
           const result = await rebuildMusikverlagDatabase(id);
-          await reload();
+          const fresh = await fetchMusikverlageState();
+          setData(fresh);
+          const after = fresh.entries[id];
+          if (!result.hasTableDb || !after?.hasTableDb) {
+            setErr(
+              `Die SQLite-Datenbank wurde auf dem Server nicht gefunden (gemeldete Zeilen: ${result.tableIndexedRowCount.toLocaleString("de-DE")}). ` +
+                "Bitte Speicherpfad/data-Volumen prüfen — bei mehreren Server-Instanzen muss data/ geteilt sein."
+            );
+            return;
+          }
           setSuccessMsg(
-            `Datenbank erzeugt: ${result.tableIndexedRowCount.toLocaleString("de-DE")} Zeilen indexiert.`
+            `Datenbank bereit: ${result.tableIndexedRowCount.toLocaleString("de-DE")} Zeilen indexiert.`
           );
         } catch (e) {
           setErr(e instanceof Error ? e.message : "Datenbank konnte nicht erzeugt werden.");
+          await reload();
           return;
         } finally {
           setImportProgress(null);
@@ -340,7 +351,10 @@ export function MusikverlageModal({ open, onClose }: Props) {
                             <div className="musikverlage-action-grid">
                               <button
                                 type="button"
-                                className="btn-modal musikverlage-file-action-btn"
+                                className={
+                                  "btn-modal musikverlage-file-action-btn" +
+                                  (hasTableDb ? " musikverlage-file-action-btn--ready" : "")
+                                }
                                 disabled={ub || !canOpenDatabase}
                                 onClick={() => void handleOpenDatabase(row.id)}
                                 title={

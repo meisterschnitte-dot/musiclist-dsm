@@ -13,10 +13,11 @@ function cellStr(v: unknown): string {
 export function normBmgpmHeader(h: string): string {
   return h
     .replace(/\u00a0/g, " ")
+    .replace(/[\u2010-\u2015\u2212\uFF1A]/g, (ch) => (ch === "\uFF1A" ? ":" : "-"))
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase()
-    .replace(/\s*:\s*/g, ":");
+    .replace(/\s*[:/]\s*/g, ":");
 }
 
 export type BmgpmHeaderMap = {
@@ -44,14 +45,33 @@ function findCol(h: string[], variants: string[], pred?: (norm: string) => boole
 }
 
 /** Kopfzeile steht oft nicht in Zeile 1 (Metadaten, Leerzeilen). */
+function scoreBmgpmHeaderRow(headers: unknown[]): number {
+  const map = parseBmgpmHeaderRow(headers);
+  if (!map) return 0;
+  let score = 0;
+  if (map.trackAudioFilenameIdx != null) score += 3;
+  if (map.albumCodeIdx != null) score += 2;
+  if (map.trackTitleIdx != null) score += 2;
+  if (map.albumReleaseDateIdx != null) score += 1;
+  if (map.libraryNameIdx != null) score += 1;
+  if (map.trackArtistsIdx != null || map.trackArtistIdx != null) score += 1;
+  return score;
+}
+
 export function findBmgpmHeaderRowIndex(rows: unknown[][]): number | null {
-  const max = Math.min(rows.length, 40);
+  const max = Math.min(rows.length, 120);
+  let bestRow: number | null = null;
+  let bestScore = 0;
   for (let r = 0; r < max; r++) {
     const row = rows[r];
     if (!Array.isArray(row)) continue;
-    if (parseBmgpmHeaderRow(row) != null) return r;
+    const score = scoreBmgpmHeaderRow(row);
+    if (score > bestScore) {
+      bestScore = score;
+      bestRow = r;
+    }
   }
-  return null;
+  return bestScore >= 3 ? bestRow : null;
 }
 
 export function formatBmgpmHeaderPreview(headers: unknown[], maxCols = 8): string {
@@ -111,7 +131,7 @@ export function parseBmgpmHeaderRow(headers: unknown[]): BmgpmHeaderMap | null {
       "filename",
       "original file name",
     ]) ??
-    find([], (x) => /track[.:].*audio.*file/.test(x) || /^file\s*name$/.test(x));
+    find([], (x) => /track[.:].*audio.*file/.test(x) || /audio.*file.*name/.test(x) || /^file\s*name$/.test(x));
   const albumReleaseDateIdx =
     find(["album:release date", "album release date"]) ??
     find([], (x) => /album[.:].*release.*date/.test(x));
@@ -270,14 +290,20 @@ export function bmgpmRowKeyFromRow(map: BmgpmHeaderMap, row: unknown[]): string 
   }
   const code =
     map.albumCodeIdx != null && map.albumCodeIdx < row.length
-      ? cellStr(row[map.albumCodeIdx]).toLowerCase()
+      ? cellStr(row[map.albumCodeIdx]).toLowerCase().replace(/\s+/g, "")
       : "";
   const title =
     map.trackTitleIdx != null && map.trackTitleIdx < row.length
-      ? cellStr(row[map.trackTitleIdx]).toLowerCase()
+      ? cellStr(row[map.trackTitleIdx]).toLowerCase().replace(/\s+/g, " ")
       : "";
-  if (code && title) return `${code}|${title}`;
-  if (title) return title;
+  const display =
+    map.albumDisplayTitleIdx != null && map.albumDisplayTitleIdx < row.length
+      ? cellStr(row[map.albumDisplayTitleIdx]).toLowerCase()
+      : "";
+  if (code && title) return `${code}|${title.replace(/\s+/g, "_")}`;
+  if (code && display) return `${code}|${display.replace(/\s+/g, "_")}`;
+  if (code) return code;
+  if (title) return title.replace(/\s+/g, "_");
   return null;
 }
 

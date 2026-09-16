@@ -2518,6 +2518,11 @@ body {
   text-align: center;
 }
 
+.musikverlage-file-action-btn--ready:not(:disabled) {
+  border-color: var(--dup-filename-full);
+  color: var(--dup-filename-full);
+}
+
 .musikverlage-file-name {
   max-width: 14rem;
   overflow: hidden;
