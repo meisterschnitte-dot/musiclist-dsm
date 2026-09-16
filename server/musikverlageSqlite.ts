@@ -38,43 +38,75 @@ export function sqlitePathForMusikverlag(id: MusikverlagId): string {
   return path.join(DB_DIR(), `${id}.sqlite`);
 }
 
-export function removeMusikverlagSqliteDb(id: MusikverlagId): void {
+function sqliteSidecarPaths(id: MusikverlagId): string[] {
   const p = sqlitePathForMusikverlag(id);
-  try {
-    fs.unlinkSync(p);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  return [p, `${p}-wal`, `${p}-shm`];
+}
+
+export function removeMusikverlagSqliteDb(id: MusikverlagId): void {
+  for (const p of sqliteSidecarPaths(id)) {
+    try {
+      fs.unlinkSync(p);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
   }
 }
 
 export function musikverlagSqliteExists(id: MusikverlagId): boolean {
+  const p = sqlitePathForMusikverlag(id);
   try {
-    return fs.statSync(sqlitePathForMusikverlag(id)).isFile();
+    const st = fs.statSync(p);
+    if (st.isFile() && st.size > 0) return true;
+  } catch {
+    /* continue */
+  }
+  try {
+    return fs.statSync(`${p}-wal`).isFile();
   } catch {
     return false;
   }
 }
 
+function checkpointAndClose(db: InstanceType<typeof Database>): void {
+  try {
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {
+    /* ignore */
+  }
+  try {
+    db.close();
+  } catch {
+    /* bereits geschlossen */
+  }
+}
+
 export function countRowsInMusikverlagDb(id: MusikverlagId): number | null {
   if (!musikverlagSqliteExists(id)) return null;
-  const db = new Database(sqlitePathForMusikverlag(id), { readonly: true });
   try {
-    const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
-    if (fmt?.v === "wcpm_v1") {
-      const r = db.prepare("SELECT COUNT(*) AS c FROM wcpm_tracks").get() as { c: number };
-      return r.c;
+    // Nicht readonly: WAL muss eingespielt werden, sonst wirkt die DB leer.
+    const db = new Database(sqlitePathForMusikverlag(id));
+    try {
+      const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
+      if (fmt?.v === "wcpm_v1") {
+        const r = db.prepare("SELECT COUNT(*) AS c FROM wcpm_tracks").get() as { c: number };
+        return Number(r.c) || 0;
+      }
+      if (fmt?.v === "bmgpm_v1") {
+        const r = db.prepare("SELECT COUNT(*) AS c FROM bmgpm_tracks").get() as { c: number };
+        return Number(r.c) || 0;
+      }
+      if (fmt?.v === "generic_excel_v1") {
+        const r = db.prepare("SELECT COUNT(*) AS c FROM sheet_rows").get() as { c: number };
+        return Number(r.c) || 0;
+      }
+      return null;
+    } finally {
+      db.close();
     }
-    if (fmt?.v === "bmgpm_v1") {
-      const r = db.prepare("SELECT COUNT(*) AS c FROM bmgpm_tracks").get() as { c: number };
-      return r.c;
-    }
-    if (fmt?.v === "generic_excel_v1") {
-      const r = db.prepare("SELECT COUNT(*) AS c FROM sheet_rows").get() as { c: number };
-      return r.c;
-    }
+  } catch (e) {
+    console.error("[musikverlage] countRows", id, e);
     return null;
-  } finally {
-    db.close();
   }
 }
 
@@ -223,7 +255,7 @@ function rebuildWcpmDb(excelPaths: string[], id: MusikverlagId): RebuildMusikver
     const rowCount = insertAll();
     return { rowCount };
   } finally {
-    db.close();
+    checkpointAndClose(db);
   }
 }
 
@@ -314,7 +346,7 @@ function rebuildBmgpmDb(excelPaths: string[], id: MusikverlagId): RebuildMusikve
     const rowCount = insertAll();
     return { rowCount };
   } finally {
-    db.close();
+    checkpointAndClose(db);
   }
 }
 
@@ -334,7 +366,7 @@ function appendBmgpmFromExcel(excelPath: string): RebuildMusikverlagDbResult {
   try {
     const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
     if (fmt?.v !== "bmgpm_v1") {
-      db.close();
+      checkpointAndClose(db);
       removeMusikverlagSqliteDb(id);
       return rebuildBmgpmDb([excelPath], id);
     }
@@ -345,7 +377,11 @@ function appendBmgpmFromExcel(excelPath: string): RebuildMusikverlagDbResult {
     const rowCount = ingestBmgpmExcelPath(db, excelPath, ins, maxDate);
     return { rowCount };
   } finally {
-    db.close();
+    try {
+      checkpointAndClose(db);
+    } catch {
+      /* bereits geschlossen beim Format-Mismatch */
+    }
   }
 }
 
@@ -385,7 +421,7 @@ function rebuildGenericExcelDb(excelPaths: string[], id: MusikverlagId): Rebuild
     const rowCount = insertAll();
     return { rowCount };
   } finally {
-    db.close();
+    checkpointAndClose(db);
   }
 }
 

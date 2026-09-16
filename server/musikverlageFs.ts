@@ -9,11 +9,17 @@ const ROOT = () => path.join(getDataDir(), "musikverlage");
 const CONFIG_FILE = () => path.join(ROOT(), "config.json");
 const UPLOADS_DIR = () => path.join(ROOT(), "uploads");
 
+export type TableDbBuildStatus = "running" | "ok" | "error";
+
 export type MusikverlageEntryStored = {
   apiBaseUrl?: string;
   xlsxFiles?: { storedFileName: string; originalFileName: string; uploadedAtIso: string }[];
   xlsxFileName?: string | null;
   xlsxUploadedAtIso?: string | null;
+  tableDbRowCount?: number | null;
+  tableDbBuiltAtIso?: string | null;
+  tableDbBuildStatus?: TableDbBuildStatus | null;
+  tableDbBuildError?: string | null;
 };
 
 export type MusikverlageConfigFile = {
@@ -114,6 +120,32 @@ export async function readMusikverlageConfig(): Promise<MusikverlageConfigFile> 
           e.xlsxUploadedAtIso === null || e.xlsxUploadedAtIso === undefined
             ? e.xlsxUploadedAtIso ?? undefined
             : String(e.xlsxUploadedAtIso),
+        tableDbRowCount:
+          typeof e.tableDbRowCount === "number" && Number.isFinite(e.tableDbRowCount)
+            ? e.tableDbRowCount
+            : e.tableDbRowCount === null
+              ? null
+              : undefined,
+        tableDbBuiltAtIso:
+          typeof e.tableDbBuiltAtIso === "string" && e.tableDbBuiltAtIso.trim()
+            ? e.tableDbBuiltAtIso.trim()
+            : e.tableDbBuiltAtIso === null
+              ? null
+              : undefined,
+        tableDbBuildStatus:
+          e.tableDbBuildStatus === "running" ||
+          e.tableDbBuildStatus === "ok" ||
+          e.tableDbBuildStatus === "error"
+            ? e.tableDbBuildStatus
+            : e.tableDbBuildStatus === null
+              ? null
+              : undefined,
+        tableDbBuildError:
+          typeof e.tableDbBuildError === "string" && e.tableDbBuildError.trim()
+            ? e.tableDbBuildError.trim()
+            : e.tableDbBuildError === null
+              ? null
+              : undefined,
       };
     }
     return { version: 1, entries };
@@ -123,6 +155,15 @@ export async function readMusikverlageConfig(): Promise<MusikverlageConfigFile> 
     }
     throw e;
   }
+}
+
+export async function patchMusikverlageEntry(
+  id: MusikverlagId,
+  patch: Partial<MusikverlageEntryStored>
+): Promise<void> {
+  const cfg = await readMusikverlageConfig();
+  cfg.entries[id] = { ...cfg.entries[id], ...patch };
+  await writeMusikverlageConfig(cfg);
 }
 
 export async function writeMusikverlageConfig(c: MusikverlageConfigFile): Promise<void> {

@@ -51,6 +51,12 @@ const MUSIKVERLAG_DEFAULTS: Partial<
   },
 };
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 export function MusikverlageModal({ open, onClose }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -162,43 +168,46 @@ export function MusikverlageModal({ open, onClose }: Props) {
         setUploadBusyId(id);
         setImportProgress({
           label: "Datenbank wird aus der importierten Tabelle erzeugt …",
-          progress: 35,
+          progress: 20,
         });
         try {
           const result = await rebuildMusikverlagDatabase(id);
-          if (!result.hasTableDb) {
+          let hasTableDb = result.hasTableDb;
+          let rowCount = result.tableIndexedRowCount;
+          if (result.pending || !hasTableDb) {
+            const deadline = Date.now() + 15 * 60 * 1000;
+            let tick = 25;
+            while (Date.now() < deadline) {
+              await sleep(2000);
+              tick = Math.min(90, tick + 3);
+              setImportProgress({
+                label: "Datenbank wird erzeugt (große Katalogdatei, bitte warten) …",
+                progress: tick,
+              });
+              const fresh = await fetchMusikverlageState();
+              setData(fresh);
+              const after = fresh.entries[id];
+              if (after?.tableDbBuildStatus === "error") {
+                throw new Error(
+                  after.tableDbBuildError || "Datenbank konnte nicht erzeugt werden."
+                );
+              }
+              if (after?.hasTableDb) {
+                hasTableDb = true;
+                rowCount = after.tableDbRowCount ?? rowCount;
+                break;
+              }
+            }
+          }
+          if (!hasTableDb) {
             setErr(
-              "Die SQLite-Datenbank wurde auf dem Server nicht angelegt. Bitte Server-Log und data/musikverlage/db prüfen."
+              "Die SQLite-Datenbank ist nach dem Erzeugen noch nicht sichtbar. Bitte die Seite neu laden oder data/musikverlage/db prüfen."
             );
             openDb = false;
             await reload();
           } else {
-            setSuccessMsg(
-              `Datenbank bereit: ${result.tableIndexedRowCount.toLocaleString("de-DE")} Zeilen indexiert.`
-            );
-            setData((prev) => {
-              if (!prev) return prev;
-              const cur = prev.entries[id];
-              return {
-                ...prev,
-                entries: {
-                  ...prev.entries,
-                  [id]: {
-                    ...cur,
-                    apiBaseUrl: cur?.apiBaseUrl ?? "",
-                    xlsxFileName: cur?.xlsxFileName ?? null,
-                    xlsxUploadedAtIso: cur?.xlsxUploadedAtIso ?? null,
-                    xlsxFileCount: cur?.xlsxFileCount ?? 0,
-                    xlsxFileNames: cur?.xlsxFileNames ?? [],
-                    hasFile: cur?.hasFile ?? true,
-                    hasTableDb: true,
-                    tableDbRowCount: result.tableIndexedRowCount,
-                    canOpenDatabase: true,
-                  },
-                },
-              };
-            });
-            void reload();
+            setSuccessMsg(`Datenbank bereit: ${rowCount.toLocaleString("de-DE")} Zeilen indexiert.`);
+            await reload();
           }
         } catch (e) {
           setErr(e instanceof Error ? e.message : "Datenbank konnte nicht erzeugt werden.");
@@ -363,10 +372,21 @@ export function MusikverlageModal({ open, onClose }: Props) {
                                 {hasAnyFiles
                                   ? `${e?.xlsxFileCount?.toLocaleString("de-DE") ?? fileNames.length} Datei(en) · ${formatTs(e?.xlsxUploadedAtIso ?? null)}`
                                   : "Noch keine importierten Tabellen"}
-                                {hasTableDb && e.tableDbRowCount != null ? (
-                                  <> · DB: {e.tableDbRowCount.toLocaleString("de-DE")} Zeilen</>
+                                {hasTableDb ? (
+                                  <>
+                                    {" "}
+                                    · DB: {(e.tableDbRowCount ?? 0).toLocaleString("de-DE")} Zeilen
+                                  </>
+                                ) : e?.tableDbBuildStatus === "running" ? (
+                                  <>
+                                    {" "}
+                                    · <span className="musikverlage-db-building">DB wird erzeugt …</span>
+                                  </>
                                 ) : hasAnyFiles ? (
-                                  <> · <span className="musikverlage-db-missing">DB noch nicht erzeugt</span></>
+                                  <>
+                                    {" "}
+                                    · <span className="musikverlage-db-missing">DB noch nicht erzeugt</span>
+                                  </>
                                 ) : null}
                               </div>
                             </div>

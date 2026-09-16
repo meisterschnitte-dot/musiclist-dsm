@@ -5447,6 +5447,11 @@ tr:hover td {
   font-weight: 600;
 }
 
+.musikverlage-db-building {
+  color: var(--app-text-secondary);
+  font-weight: 600;
+}
+
 .musikverlage-import-success {
   margin: 0 0 0.65rem;
   padding: 0.55rem 0.75rem;

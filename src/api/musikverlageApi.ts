@@ -26,11 +26,13 @@ export type MusikverlageEntryDto = {
   hasTableDb: boolean;
   tableDbRowCount: number | null;
   canOpenDatabase?: boolean;
+  tableDbBuildStatus?: "running" | "ok" | "error" | null;
+  tableDbBuildError?: string | null;
 };
 
 export async function rebuildMusikverlagDatabase(
   id: MusikverlagId
-): Promise<{ tableIndexedRowCount: number; hasTableDb: boolean }> {
+): Promise<{ tableIndexedRowCount: number; hasTableDb: boolean; pending: boolean }> {
   const t = getUsersApiToken();
   if (!t) throw new Error("Nicht angemeldet.");
   const res = await fetch(`${API}/admin/musikverlage/${encodeURIComponent(id)}/database/rebuild`, {
@@ -38,10 +40,17 @@ export async function rebuildMusikverlagDatabase(
     headers: { Authorization: `Bearer ${t}` },
   });
   if (!res.ok) throw new Error(await parseError(res));
-  const data = (await res.json()) as { tableIndexedRowCount?: number; hasTableDb?: boolean };
+  const data = (await res.json()) as {
+    tableIndexedRowCount?: number;
+    hasTableDb?: boolean;
+    pending?: boolean;
+  };
+  const pending = data.pending === true;
+  const rowCount = data.tableIndexedRowCount ?? 0;
   return {
-    tableIndexedRowCount: data.tableIndexedRowCount ?? 0,
-    hasTableDb: data.hasTableDb === true,
+    tableIndexedRowCount: rowCount,
+    hasTableDb: data.hasTableDb === true || (!pending && rowCount > 0),
+    pending,
   };
 }
 
