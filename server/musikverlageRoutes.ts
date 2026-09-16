@@ -67,6 +67,8 @@ export function createMusikverlageRouter(): Router {
           hasFile: boolean;
           hasTableDb: boolean;
           tableDbRowCount: number | null;
+          /** Datenbank-Dialog (WCPM/BMGPM): Tabelle und/oder SQLite vorhanden. */
+          canOpenDatabase: boolean;
         }
       > = {};
       for (const row of MUSIKVERLAGE_CATALOG) {
@@ -83,6 +85,7 @@ export function createMusikverlageRouter(): Router {
             : st?.xlsxFileName
               ? [st.xlsxFileName]
               : [];
+        const dbCapable = id === "wcpm" || id === "bmgpm";
         entries[id] = {
           apiBaseUrl: typeof st?.apiBaseUrl === "string" ? st.apiBaseUrl : "",
           xlsxFileName: latest?.originalFileName ?? st?.xlsxFileName ?? null,
@@ -92,6 +95,7 @@ export function createMusikverlageRouter(): Router {
           hasFile: onDisk,
           hasTableDb,
           tableDbRowCount: hasTableDb ? countRowsInMusikverlagDb(id) : null,
+          canOpenDatabase: dbCapable && (onDisk || hasTableDb),
         };
       }
       res.json({
@@ -262,6 +266,43 @@ export function createMusikverlageRouter(): Router {
     uploadMiddleware,
     async (req, res) => {
       await uploadHandler("append", req, res);
+    }
+  );
+
+  r.post(
+    "/admin/musikverlage/:id/database/rebuild",
+    bearerAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (!id) {
+        res.status(400).json({ error: "Fehlende ID." });
+        return;
+      }
+      try {
+        assertMusikverlagId(id);
+        if (id !== "wcpm" && id !== "bmgpm") {
+          res.status(400).json({ error: "Datenbank-Neuaufbau für diesen Verlag nicht verfügbar." });
+          return;
+        }
+        const excelPaths = (await listUploadFiles(id as MusikverlagId)).filter((p) => {
+          const pLower = p.toLowerCase();
+          return pLower.endsWith(".xlsx") || pLower.endsWith(".xls") || pLower.endsWith(".csv");
+        });
+        if (excelPaths.length === 0) {
+          res.status(400).json({ error: "Keine importierte Tabelle auf dem Server — bitte zuerst hochladen." });
+          return;
+        }
+        const { rowCount } = rebuildMusikverlagTableDb(id as MusikverlagId, excelPaths, {
+          uploadMode: "replace",
+        });
+        res.json({ ok: true, tableIndexedRowCount: rowCount });
+      } catch (e) {
+        console.error("[musikverlage] rebuild-db", e);
+        res.status(500).json({
+          error: e instanceof Error ? e.message : "Datenbank konnte nicht erzeugt werden.",
+        });
+      }
     }
   );
 

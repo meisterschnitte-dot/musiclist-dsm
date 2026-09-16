@@ -25,7 +25,22 @@ export type MusikverlageEntryDto = {
   /** SQLite-Zuordnungstabelle aus der Excel (nur bei hochgeladener Datei). */
   hasTableDb: boolean;
   tableDbRowCount: number | null;
+  canOpenDatabase?: boolean;
 };
+
+export async function rebuildMusikverlagDatabase(
+  id: MusikverlagId
+): Promise<{ tableIndexedRowCount: number }> {
+  const t = getUsersApiToken();
+  if (!t) throw new Error("Nicht angemeldet.");
+  const res = await fetch(`${API}/admin/musikverlage/${encodeURIComponent(id)}/database/rebuild`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${t}` },
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  const data = (await res.json()) as { tableIndexedRowCount?: number };
+  return { tableIndexedRowCount: data.tableIndexedRowCount ?? 0 };
+}
 
 export type MusikverlageStateResponse = {
   catalog: MusikverlageCatalogRow[];

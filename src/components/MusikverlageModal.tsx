@@ -4,6 +4,7 @@ import {
   deleteMusikverlageXlsx,
   fetchMusikverlageState,
   putMusikverlageEntries,
+  rebuildMusikverlagDatabase,
   uploadMusikverlageXlsx,
   type MusikverlageEntryDto,
   type MusikverlageStateResponse,
@@ -144,6 +145,42 @@ export function MusikverlageModal({ open, onClose }: Props) {
     [data?.catalog, reload]
   );
 
+  const handleOpenDatabase = useCallback(
+    async (id: MusikverlagId) => {
+      if (!musikverlagHasDatabase(id)) return;
+      const entry = data?.entries[id];
+      const hasFile = !!entry?.hasFile;
+      const hasDb = !!entry?.hasTableDb;
+      if (!hasFile && !hasDb) {
+        setErr("Keine importierte Tabelle — bitte zuerst hochladen.");
+        return;
+      }
+      setErr(null);
+      if (hasFile && !hasDb) {
+        setUploadBusyId(id);
+        setImportProgress({
+          label: "Datenbank wird aus der importierten Tabelle erzeugt …",
+          progress: 35,
+        });
+        try {
+          const result = await rebuildMusikverlagDatabase(id);
+          await reload();
+          setSuccessMsg(
+            `Datenbank erzeugt: ${result.tableIndexedRowCount.toLocaleString("de-DE")} Zeilen indexiert.`
+          );
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : "Datenbank konnte nicht erzeugt werden.");
+          return;
+        } finally {
+          setImportProgress(null);
+          setUploadBusyId(null);
+        }
+      }
+      setDbModalId(id);
+    },
+    [data?.entries, reload]
+  );
+
   const onRemoveFile = useCallback(
     async (id: MusikverlagId) => {
       setErr(null);
@@ -218,6 +255,10 @@ export function MusikverlageModal({ open, onClose }: Props) {
                           ? [e.xlsxFileName]
                           : [];
                     const hasAnyFiles = !!e?.hasFile;
+                    const hasTableDb = !!e?.hasTableDb;
+                    const canOpenDatabase =
+                      e?.canOpenDatabase === true ||
+                      (musikverlagHasDatabase(row.id) && (hasAnyFiles || hasTableDb));
                     const defaultUrl = MUSIKVERLAG_DEFAULTS[row.id]?.url ?? "";
                     const configuredApiUrl = (e?.apiBaseUrl ?? "").trim();
                     const effectiveApiUrl = apiDraft[row.id] ?? "";
@@ -289,8 +330,10 @@ export function MusikverlageModal({ open, onClose }: Props) {
                                 {hasAnyFiles
                                   ? `${e?.xlsxFileCount?.toLocaleString("de-DE") ?? fileNames.length} Datei(en) · ${formatTs(e?.xlsxUploadedAtIso ?? null)}`
                                   : "Noch keine importierten Tabellen"}
-                                {e?.hasTableDb && e.tableDbRowCount != null ? (
+                                {hasTableDb && e.tableDbRowCount != null ? (
                                   <> · DB: {e.tableDbRowCount.toLocaleString("de-DE")} Zeilen</>
+                                ) : hasAnyFiles ? (
+                                  <> · <span className="musikverlage-db-missing">DB noch nicht erzeugt</span></>
                                 ) : null}
                               </div>
                             </div>
@@ -298,12 +341,16 @@ export function MusikverlageModal({ open, onClose }: Props) {
                               <button
                                 type="button"
                                 className="btn-modal musikverlage-file-action-btn"
-                                disabled={ub || !musikverlagHasDatabase(row.id) || !hasAnyFiles}
-                                onClick={() => setDbModalId(row.id)}
+                                disabled={ub || !canOpenDatabase}
+                                onClick={() => void handleOpenDatabase(row.id)}
                                 title={
                                   !musikverlagHasDatabase(row.id)
                                     ? "Datenbankansicht für diesen Verlag noch nicht verfügbar."
-                                    : undefined
+                                    : !canOpenDatabase
+                                      ? "Zuerst eine Tabelle hochladen."
+                                      : hasAnyFiles && !hasTableDb
+                                        ? "SQLite-Datenbank wird beim ersten Öffnen aus der Datei erzeugt."
+                                        : undefined
                                 }
                               >
                                 Datenbank
