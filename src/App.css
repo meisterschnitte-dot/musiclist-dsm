@@ -2383,6 +2383,11 @@ body {
   z-index: 110;
 }
 
+/** Musikverlag-DB über Musikverlage-Dialog und Import-Fortschritt */
+.modal-backdrop--musikverlag-db {
+  z-index: 280;
+}
+
 .modal {
   width: 100%;
   max-width: 440px;

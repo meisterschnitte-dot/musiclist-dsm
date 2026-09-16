@@ -248,7 +248,11 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
   if (!open || !verlagId) return null;
 
   return (
-    <div className="modal-backdrop modal-backdrop--stacked" role="presentation" onMouseDown={onClose}>
+    <div
+      className="modal-backdrop modal-backdrop--stacked modal-backdrop--musikverlag-db"
+      role="presentation"
+      onMouseDown={onClose}
+    >
       <div
         className="modal modal--sys-settings modal--musikverlag-db"
         role="dialog"

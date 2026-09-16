@@ -157,6 +157,7 @@ export function MusikverlageModal({ open, onClose }: Props) {
         return;
       }
       setErr(null);
+      let openDb = true;
       if (hasFile && !hasDb) {
         setUploadBusyId(id);
         setImportProgress({
@@ -165,29 +166,50 @@ export function MusikverlageModal({ open, onClose }: Props) {
         });
         try {
           const result = await rebuildMusikverlagDatabase(id);
-          const fresh = await fetchMusikverlageState();
-          setData(fresh);
-          const after = fresh.entries[id];
-          if (!result.hasTableDb || !after?.hasTableDb) {
+          if (!result.hasTableDb) {
             setErr(
-              `Die SQLite-Datenbank wurde auf dem Server nicht gefunden (gemeldete Zeilen: ${result.tableIndexedRowCount.toLocaleString("de-DE")}). ` +
-                "Bitte Speicherpfad/data-Volumen prüfen — bei mehreren Server-Instanzen muss data/ geteilt sein."
+              "Die SQLite-Datenbank wurde auf dem Server nicht angelegt. Bitte Server-Log und data/musikverlage/db prüfen."
             );
-            return;
+            openDb = false;
+            await reload();
+          } else {
+            setSuccessMsg(
+              `Datenbank bereit: ${result.tableIndexedRowCount.toLocaleString("de-DE")} Zeilen indexiert.`
+            );
+            setData((prev) => {
+              if (!prev) return prev;
+              const cur = prev.entries[id];
+              return {
+                ...prev,
+                entries: {
+                  ...prev.entries,
+                  [id]: {
+                    ...cur,
+                    apiBaseUrl: cur?.apiBaseUrl ?? "",
+                    xlsxFileName: cur?.xlsxFileName ?? null,
+                    xlsxUploadedAtIso: cur?.xlsxUploadedAtIso ?? null,
+                    xlsxFileCount: cur?.xlsxFileCount ?? 0,
+                    xlsxFileNames: cur?.xlsxFileNames ?? [],
+                    hasFile: cur?.hasFile ?? true,
+                    hasTableDb: true,
+                    tableDbRowCount: result.tableIndexedRowCount,
+                    canOpenDatabase: true,
+                  },
+                },
+              };
+            });
+            void reload();
           }
-          setSuccessMsg(
-            `Datenbank bereit: ${result.tableIndexedRowCount.toLocaleString("de-DE")} Zeilen indexiert.`
-          );
         } catch (e) {
           setErr(e instanceof Error ? e.message : "Datenbank konnte nicht erzeugt werden.");
+          openDb = false;
           await reload();
-          return;
         } finally {
           setImportProgress(null);
           setUploadBusyId(null);
         }
       }
-      setDbModalId(id);
+      if (openDb) setDbModalId(id);
     },
     [data?.entries, reload]
   );
