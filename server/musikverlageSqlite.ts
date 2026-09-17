@@ -6,12 +6,13 @@ import type { MusikverlagId } from "../src/musikverlage/musikverlageCatalog";
 import {
   bmgpmRowKeyFromRow,
   bmgpmRowToTagPayload,
-  extractBmgpmCatalogCodeFromFileName,
   findBmgpmHeaderRowIndex,
   formatBmgpmHeaderPreview,
   parseBmgpmHeaderRow,
   parseBmgpmReleaseDate,
   type BmgpmHeaderMap,
+  bmgpmAlbumTrackPrefix,
+  bmgpmStemLookupKeys,
 } from "../src/musikverlage/bmgpmTable";
 import {
   parseWcpmHeaderRow,
@@ -579,64 +580,66 @@ function rebuildGenericExcelDb(excelPaths: string[], id: MusikverlagId): Rebuild
   }
 }
 
-/** BMGPM-Katalog: Treffer über Audio-Dateiname, Album-Code oder Display-Titel. */
+/** BMGPM-Katalog: Treffer über Audio-Dateiname (Stamm, Präfix, Album+Track). */
 export function lookupBmgpmPayloadFromDb(fileName: string): WcpmTagPayload | null {
   const id: MusikverlagId = "bmgpm";
   if (!musikverlagSqliteExists(id)) return null;
-  const stem = wcpmFilenameStem(fileName);
+  const keys = bmgpmStemLookupKeys(fileName);
   const matchKey = wcpmFilenameStemMatchKey(fileName);
-  const alnumKey = wcpmFilenameStemAlnumKey(fileName);
-  const catalogCode = extractBmgpmCatalogCodeFromFileName(fileName);
-  const db = new Database(sqlitePathForMusikverlag(id), { readonly: true });
+  const trackPrefix = bmgpmAlbumTrackPrefix(fileName);
+  const db = new Database(sqlitePathForMusikverlag(id));
   try {
     const fmt = db.prepare("SELECT v FROM meta WHERE k = ?").get("format") as { v: string } | undefined;
     if (fmt?.v !== "bmgpm_v1") return null;
-    if (stem) {
-      const exact = db
-        .prepare("SELECT payload_json FROM bmgpm_tracks WHERE row_key = ?")
-        .get(stem) as { payload_json: string } | undefined;
-      if (exact?.payload_json) return JSON.parse(exact.payload_json) as WcpmTagPayload;
+
+    const parsePayload = (raw: string | undefined): WcpmTagPayload | null => {
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as WcpmTagPayload;
+      } catch {
+        return null;
+      }
+    };
+
+    const getByKey = db.prepare("SELECT payload_json FROM bmgpm_tracks WHERE row_key = ?");
+    for (const key of keys) {
+      const exact = getByKey.get(key) as { payload_json: string } | undefined;
+      const payload = parsePayload(exact?.payload_json);
+      if (payload) return payload;
     }
-    if (matchKey) {
-      db.function("wcpm_stem_match_key", (x: string | null) => {
-        if (x == null) return null;
-        return wcpmFilenameStemMatchKey(String(x));
-      });
-      const fuzzy = db
+
+    const getByPrefix = db.prepare(
+      `SELECT payload_json FROM bmgpm_tracks WHERE row_key LIKE ? ORDER BY LENGTH(row_key) ASC LIMIT 1`
+    );
+    const stem = wcpmFilenameStem(fileName);
+    const likeStems = new Set<string>();
+    if (stem.length >= 12) likeStems.add(stem);
+    for (const key of keys) {
+      if (key.length >= 12) likeStems.add(key);
+    }
+    for (const s of likeStems) {
+      const hit = getByPrefix.get(`${s}%`) as { payload_json: string } | undefined;
+      const payload = parsePayload(hit?.payload_json);
+      if (payload) return payload;
+    }
+    if (trackPrefix && trackPrefix.length >= 10) {
+      const hit = getByPrefix.get(`${trackPrefix}_%`) as { payload_json: string } | undefined;
+      const payload = parsePayload(hit?.payload_json);
+      if (payload) return payload;
+    }
+
+    if (matchKey.length >= 12) {
+      const compact = db
         .prepare(
           `SELECT payload_json FROM bmgpm_tracks
-           WHERE wcpm_stem_match_key(json_extract(payload_json, '$.trackAudioFilename')) = ?
+           WHERE REPLACE(REPLACE(REPLACE(row_key, '_', ''), '-', ''), ' ', '') = ?
            LIMIT 1`
         )
         .get(matchKey) as { payload_json: string } | undefined;
-      if (fuzzy?.payload_json) return JSON.parse(fuzzy.payload_json) as WcpmTagPayload;
+      const payload = parsePayload(compact?.payload_json);
+      if (payload) return payload;
     }
-    if (catalogCode) {
-      const code = catalogCode.toLowerCase();
-      const byCode = db
-        .prepare(
-          `SELECT payload_json FROM bmgpm_tracks
-           WHERE LOWER(COALESCE(json_extract(payload_json, '$.albumCode'), '')) = ?
-           ORDER BY release_date DESC
-           LIMIT 1`
-        )
-        .get(code) as { payload_json: string } | undefined;
-      if (byCode?.payload_json) return JSON.parse(byCode.payload_json) as WcpmTagPayload;
-    }
-    if (alnumKey.length >= 8) {
-      db.function("wcpm_stem_alnum_key", (x: string | null) => {
-        if (x == null) return null;
-        return wcpmFilenameStemAlnumKey(String(x));
-      });
-      const alnum = db
-        .prepare(
-          `SELECT payload_json FROM bmgpm_tracks
-           WHERE wcpm_stem_alnum_key(json_extract(payload_json, '$.trackAudioFilename')) = ?
-           LIMIT 1`
-        )
-        .get(alnumKey) as { payload_json: string } | undefined;
-      if (alnum?.payload_json) return JSON.parse(alnum.payload_json) as WcpmTagPayload;
-    }
+
     return null;
   } finally {
     db.close();

@@ -358,4 +358,31 @@ export function extractBmgpmCatalogCodeFromFileName(fileName: string): string | 
   return code || null;
 }
 
+/** Stamm-Varianten für den Katalog-Lookup (mit/ohne Präfix `BMGPM_`). */
+export function bmgpmStemLookupKeys(fileName: string): string[] {
+  const stem = wcpmFilenameStem(fileName);
+  if (!stem) return [];
+  const keys = new Set<string>();
+  keys.add(stem);
+  if (stem.startsWith("bmgpm_")) {
+    const rest = stem.slice("bmgpm_".length);
+    if (rest) keys.add(rest);
+  } else {
+    keys.add(`bmgpm_${stem}`);
+  }
+  return [...keys];
+}
+
+/**
+ * Präfix `bmgpm_<Albumcode>_<Tracknr>` für LIKE-Suche, wenn der lokale Dateiname
+ * kürzer ist als der Katalog-Dateiname (ohne Komponisten-Suffix).
+ */
+export function bmgpmAlbumTrackPrefix(fileName: string): string | null {
+  const stem = wcpmFilenameStem(fileName);
+  if (!stem) return null;
+  const withPrefix = stem.startsWith("bmgpm_") ? stem : `bmgpm_${stem}`;
+  const m = withPrefix.match(/^(bmgpm_[a-z0-9]+_\d{2,4})(?:_|$)/i);
+  return m?.[1]?.toLowerCase() ?? null;
+}
+
 export { wcpmFilenameStem, wcpmFilenameStemMatchKey, wcpmFilenameStemAlnumKey, basenamePath };

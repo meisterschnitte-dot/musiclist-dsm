@@ -41,10 +41,6 @@ import {
   openP7S1MusikportalWithOptionalClip,
   P7S1_MUSIKPORTAL_TRACK_RESEARCH_URL,
 } from "../p7s1Musikportal";
-import {
-  openBmgPmSearchWithOptionalClipAsync,
-  BMGPM_SEARCH_URL,
-} from "../bmgProductionMusic";
 import { openUpmSearchWithOptionalClipAsync, UPM_SEARCH_URL } from "../upmUniversalProductionMusic";
 import { APL_PUBLISHING_URL, openAplPublishingSearchWithOptionalClipAsync } from "../aplPublishingSearch";
 import { BIBLIOTHEQUE_MUSIC_URL, openBibliothequeMusicWithOptionalClipAsync } from "../bibliothequeMusic";
@@ -793,10 +789,7 @@ export function TagEditorModal({
         else if (hit) setWarnToggle(false);
       }
     } catch (e) {
-      setBmgpmApiErr(
-        e instanceof Error ? e.message : "Kein Katalog-Treffer — öffne BMG-Portal-Suche."
-      );
-      await openBmgPmSearchWithOptionalClipAsync(p7SearchSource);
+      setBmgpmApiErr(e instanceof Error ? e.message : "BMGPM-Lookup fehlgeschlagen.");
     } finally {
       setBmgpmApiBusy(false);
     }
@@ -1084,7 +1077,7 @@ export function TagEditorModal({
               type="button"
               className="btn-modal"
               disabled={bmgpmApiBusy}
-              title={`Zuerst BMGPM-Katalog (Musikverlage), sonst ${BMGPM_SEARCH_URL} — Dateiname/Katalogcode.`}
+              title="Zeile aus der BMGPM-Katalog-Datenbank (Verwaltung → Musikverlage) per Dateiname. Keine Website-Suche."
               onClick={() => void onBmgpmLookupClick()}
             >
               {bmgpmApiBusy ? "BMGPM …" : "BMGPM"}

@@ -21,7 +21,7 @@ export const MUSIKVERLAGE_CATALOG = [
   {
     id: "bmgpm",
     label: "BMG Production Music",
-    hint: "BMGPM-Katalog (.xlsx) hochladen → SQLite; Tag-Editor „BMGPM“: Treffer aus Katalog, sonst Portal-Suche.",
+    hint: "BMGPM-Katalog (.xlsx) hochladen → SQLite; Tag-Editor „BMGPM“ übernimmt Tags aus der Datenbank (kein Portal).",
   },
   {
     id: "sonoton",

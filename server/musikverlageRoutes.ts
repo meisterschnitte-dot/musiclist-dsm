@@ -661,26 +661,9 @@ export function createMusikverlageRouter(): Router {
       return;
     }
     if (!musikverlagSqliteExists("bmgpm")) {
-      const tablePath = await findAnyUploadFile("bmgpm");
-      if (tablePath) {
-        try {
-          const allPaths = await listUploadFiles("bmgpm");
-          await rebuildMusikverlagTableDb("bmgpm", allPaths.length ? allPaths : tablePath);
-        } catch (e) {
-          console.error("[musikverlage] bmgpm db rebuild", e);
-          res.status(500).json({
-            error:
-              e instanceof Error
-                ? e.message
-                : "BMGPM-Datenbank konnte nicht aus der Excel-Datei erzeugt werden.",
-          });
-          return;
-        }
-      }
-    }
-    if (!musikverlagSqliteExists("bmgpm")) {
       res.status(404).json({
-        error: "Keine BMGPM-Katalogtabelle hochgeladen (Verwaltung → Musikverlage).",
+        error:
+          "Keine BMGPM-Datenbank. Bitte unter Verwaltung → Musikverlage den Katalog hochladen und „Datenbank“ erzeugen.",
       });
       return;
     }
