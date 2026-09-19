@@ -413,7 +413,8 @@ export function UserManagementModal({
           <DebouncedSearchInput
             type="search"
             className="user-mgmt-filter-input"
-            placeholder="Benutzer filtern (Name, E-Mail, Firma, Rolle) …"
+            placeholder="Benutzer filtern (Name, E-Mail, Firma, Rolle) … Enter"
+            title="Enter zum Filtern"
             value={listFilter}
             onChange={setListFilter}
             autoComplete="off"

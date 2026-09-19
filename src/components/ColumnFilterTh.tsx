@@ -141,7 +141,8 @@ export const ColumnFilterTh = memo(function ColumnFilterTh({
           className="table-col-filter-input"
           value={filterValue}
           onChange={onFilterChange}
-          placeholder="Filter…"
+          placeholder="Filter… Enter"
+          title="Enter zum Filtern"
           aria-label={ariaLabelFilter}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}

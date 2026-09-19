@@ -264,7 +264,8 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
           Musikverlag-Datenbank: {verlagLabel}
         </h2>
         <p className="modal-lead modal-lead--muted">
-          Wie bei GVL: erst Filter setzen, dann Treffer laden. Feldwerte sind editierbar.{" "}
+          Wie bei GVL: Filter eintippen und Enter (oder „Filtern“) — erst dann Treffer laden.
+          Feldwerte sind editierbar.{" "}
           <strong>Warnung</strong> wirkt wie manuell gesetzte Warnung im Tag-Editor.
         </p>
         {err ? (
@@ -282,6 +283,25 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
             Bearbeiten ({selectedKeys.size.toLocaleString("de-DE")})
           </button>
         </div>
+        <form
+          id="musikverlag-db-filter"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const fd = new FormData(e.currentTarget);
+            const next: WcpmDbFilters = {
+              filenameStem: String(fd.get("filenameStem") ?? ""),
+              songTitle: String(fd.get("songTitle") ?? ""),
+              artist: String(fd.get("artist") ?? ""),
+              album: String(fd.get("album") ?? ""),
+              composer: String(fd.get("composer") ?? ""),
+              isrc: String(fd.get("isrc") ?? ""),
+              labelcode: String(fd.get("labelcode") ?? ""),
+              label: String(fd.get("label") ?? ""),
+              warnung: String(fd.get("warnung") ?? "") as WcpmDbFilters["warnung"],
+            };
+            setFilters(next);
+          }}
+        />
         <div className="sys-settings-table-wrap">
           <table className="table-dense table-resizable sys-settings-table">
             <colgroup ref={colGroupRef}>
@@ -347,73 +367,97 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="filenameStem"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.filenameStem}
                     onChange={(v) => setFilters((p) => ({ ...p, filenameStem: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="songTitle"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.songTitle}
                     onChange={(v) => setFilters((p) => ({ ...p, songTitle: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="artist"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.artist}
                     onChange={(v) => setFilters((p) => ({ ...p, artist: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="album"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.album}
                     onChange={(v) => setFilters((p) => ({ ...p, album: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="composer"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.composer}
                     onChange={(v) => setFilters((p) => ({ ...p, composer: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="isrc"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.isrc}
                     onChange={(v) => setFilters((p) => ({ ...p, isrc: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="labelcode"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.labelcode}
                     onChange={(v) => setFilters((p) => ({ ...p, labelcode: v }))}
-                    placeholder="Suchen …"
+                    placeholder="Suchen … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
                   <DebouncedSearchInput
                     type="search"
+                    name="label"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.label}
                     onChange={(v) => setFilters((p) => ({ ...p, label: v }))}
-                    placeholder="Label …"
+                    placeholder="Label … Enter"
+                    title="Enter zum Suchen"
                   />
                 </th>
                 <th>
@@ -421,6 +465,8 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
                 </th>
                 <th>
                   <select
+                    name="warnung"
+                    form="musikverlag-db-filter"
                     className="table-col-filter-input"
                     value={filters.warnung}
                     onChange={(e) =>
@@ -433,12 +479,7 @@ export function MusikverlagDatabaseModal({ open, verlagId, verlagLabel, onClose 
                   </select>
                 </th>
                 <th>
-                  <button
-                    type="button"
-                    className="btn-cell"
-                    onClick={() => void onSearch(filters)}
-                    disabled={busy}
-                  >
+                  <button type="submit" form="musikverlag-db-filter" className="btn-cell" disabled={busy}>
                     {busy ? "…" : "Filtern"}
                   </button>
                 </th>

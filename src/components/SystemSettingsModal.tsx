@@ -9,7 +9,6 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { DebouncedSearchInput } from "./DebouncedSearchInput";
-import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { openGvlWebGuessSearch } from "../gvlWebSearch";
 import type { GvlLabelDb, GvlLabelEntry } from "../storage/gvlLabelStore";
 import { startColumnResizeDrag } from "../tableColResizeDrag";
@@ -23,8 +22,6 @@ type Props = {
   /** Wenn gesetzt (Tag-Editor offen): Zeile ins Tag-Fenster übernehmen. */
   onApplyEntryToTag?: (entry: GvlLabelEntry) => void;
 };
-
-const GVL_FILTER_DEBOUNCE_MS = 200;
 
 type GvlFilterFields = {
   qLabelcode: string;
@@ -119,13 +116,7 @@ export function SystemSettingsModal({
 
   const gvlAnyFilterActive = useMemo(() => anyGvlFilterTrimmed(gvlFiltersImmediate), [gvlFiltersImmediate]);
 
-  const gvlFiltersDebounced = useDebouncedValue(gvlFiltersImmediate, GVL_FILTER_DEBOUNCE_MS);
-  const gvlFiltersDeferred = useDeferredValue(gvlFiltersDebounced);
-
-  const gvlDebouncedFilterActive = useMemo(
-    () => anyGvlFilterTrimmed(gvlFiltersDebounced),
-    [gvlFiltersDebounced]
-  );
+  const gvlFiltersDeferred = useDeferredValue(gvlFiltersImmediate);
 
   const gvlDeferredFilterActive = useMemo(
     () => anyGvlFilterTrimmed(gvlFiltersDeferred),
@@ -280,10 +271,10 @@ export function SystemSettingsModal({
           <>
             {!gvlAnyFilterActive ? (
               <p className="sys-settings-filter-hint" aria-live="polite">
-                Suchbegriff in mindestens einem Feld eingeben — es werden keine Zeilen geladen, bis Sie
-                filtern ({currentDb.entries.length.toLocaleString("de-DE")} Einträge im Bestand).
+                Suchbegriff in mindestens einem Feld eingeben und Enter drücken — erst dann wird
+                gesucht ({currentDb.entries.length.toLocaleString("de-DE")} Einträge im Bestand).
               </p>
-            ) : !gvlDebouncedFilterActive ? (
+            ) : !gvlDeferredFilterActive ? (
               <div className="sys-settings-filter-meta sys-settings-filter-meta--pending" aria-live="polite">
                 Eingabe wird ausgewertet …
               </div>
@@ -309,11 +300,13 @@ export function SystemSettingsModal({
                       <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
-                        placeholder="Suchen …"
+                        placeholder="Suchen … Enter"
                         value={qLabelcode}
                         onChange={setQLabelcode}
+                        commitOnEnter
                         autoComplete="off"
                         aria-label="Labelcode filtern"
+                        title="Enter zum Suchen"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -334,11 +327,13 @@ export function SystemSettingsModal({
                       <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
-                        placeholder="Suchen …"
+                        placeholder="Suchen … Enter"
                         value={qLabel}
                         onChange={setQLabel}
+                        commitOnEnter
                         autoComplete="off"
                         aria-label="Label filtern"
+                        title="Enter zum Suchen"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -359,11 +354,13 @@ export function SystemSettingsModal({
                       <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
-                        placeholder="Suchen …"
+                        placeholder="Suchen … Enter"
                         value={qKuerzel}
                         onChange={setQKuerzel}
+                        commitOnEnter
                         autoComplete="off"
                         aria-label="Kürzel filtern"
+                        title="Enter zum Suchen"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -384,11 +381,13 @@ export function SystemSettingsModal({
                       <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
-                        placeholder="Suchen …"
+                        placeholder="Suchen … Enter"
                         value={qPlm}
                         onChange={setQPlm}
+                        commitOnEnter
                         autoComplete="off"
                         aria-label="PLM filtern"
+                        title="Enter zum Suchen"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -409,11 +408,13 @@ export function SystemSettingsModal({
                       <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
-                        placeholder="Suchen …"
+                        placeholder="Suchen … Enter"
                         value={qHersteller}
                         onChange={setQHersteller}
+                        commitOnEnter
                         autoComplete="off"
                         aria-label="Hersteller filtern"
+                        title="Enter zum Suchen"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -434,11 +435,13 @@ export function SystemSettingsModal({
                       <DebouncedSearchInput
                         type="search"
                         className="table-col-filter-input"
-                        placeholder="Suchen …"
+                        placeholder="Suchen … Enter"
                         value={qRechter}
                         onChange={setQRechter}
+                        commitOnEnter
                         autoComplete="off"
                         aria-label="Rechterückrufe filtern"
+                        title="Enter zum Suchen"
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       />
@@ -469,10 +472,10 @@ export function SystemSettingsModal({
                   {!gvlAnyFilterActive ? (
                     <tr>
                       <td colSpan={8} className="sys-settings-no-hits sys-settings-no-hits--idle">
-                        Keine Anzeige — bitte oben filtern (z. B. Labelcode oder Label).
+                        Keine Anzeige — bitte oben filtern und Enter drücken (z. B. Labelcode oder Label).
                       </td>
                     </tr>
-                  ) : !gvlDebouncedFilterActive ? (
+                  ) : !gvlDeferredFilterActive ? (
                     <tr>
                       <td colSpan={8} className="sys-settings-no-hits sys-settings-no-hits--pending">
                         Liste wird gleich aktualisiert …
