@@ -94,14 +94,6 @@ function findPlaylistRowForFileName(
   return null;
 }
 
-function findPlaylistRowById(
-  playlist: PlaylistEntry[] | null,
-  entryId: string | null | undefined
-): PlaylistEntry | null {
-  if (!playlist?.length || !entryId) return null;
-  return playlist.find((r) => r.id === entryId) ?? null;
-}
-
 export type LoopClipRequest = {
   entryId: string;
   recInFrames: number;
@@ -183,13 +175,17 @@ export function MediaPlayerDock({
     }
   }, []);
 
-  const mediaOriginRow = useCallback((): PlaylistEntry | null => {
-    const loop = clipLoopRef.current;
-    return (
-      findPlaylistRowById(playlist, loop?.entryId) ??
-      findPlaylistRowForFileName(playlist, label)
-    );
-  }, [playlist, label]);
+  /**
+   * Datei-Zeit 0 entspricht diesem Programm-TC.
+   * Im Clip-Loop: Timeline-Ursprung (die geladene Datei liegt auf der Timeline, nicht am Clip-In).
+   * Sonst: Clip-In der passenden Playlist-Zeile, falls der Dateiname zugeordnet ist.
+   */
+  const mediaTimeOriginFrames = useCallback((): number => {
+    if (clipLoopRef.current) return Math.max(0, originFrames);
+    const matched = findPlaylistRowForFileName(playlist, label);
+    if (matched) return matched.recInFrames;
+    return Math.max(0, originFrames);
+  }, [playlist, label, originFrames]);
 
   /** Beim Öffnen einer anderen Playlist: Start-TC = Stunde des ersten Eintrags, sonst 00:00:00. Nur bei Wechsel des Dokumenttitels, damit manuelle Eingabe erhalten bleibt. */
   useEffect(() => {
@@ -286,23 +282,16 @@ export function MediaPlayerDock({
     }
     const t = el.currentTime;
     const fps = DEFAULT_FPS;
-    const matched = mediaOriginRow();
-    let fr: number;
-    if (matched) {
-      fr = matched.recInFrames + Math.floor(t * fps);
-    } else {
-      fr = originFrames + Math.floor(t * fps);
-    }
-    setPlayheadFrames(fr);
-  }, [objectUrl, mediaEl, mediaOriginRow, originFrames]);
+    const origin = mediaTimeOriginFrames();
+    setPlayheadFrames(origin + Math.floor(t * fps));
+  }, [objectUrl, mediaEl, mediaTimeOriginFrames]);
 
   const wrapClipLoopIfNeeded = useCallback(() => {
     const loop = clipLoopRef.current;
     const el = mediaEl();
     if (!loop || !el || !objectUrl) return;
     const fps = DEFAULT_FPS;
-    const originRow = mediaOriginRow();
-    const origin = originRow ? originRow.recInFrames : Math.max(0, originFrames);
+    const origin = mediaTimeOriginFrames();
     let tIn = offsetFromOriginFrame(loop.inFrames, origin, fps) / fps;
     let tOut = offsetFromOriginFrame(loop.outFrames, origin, fps) / fps;
     if (!Number.isFinite(tIn) || !Number.isFinite(tOut) || !(tOut > tIn)) return;
@@ -310,10 +299,7 @@ export function MediaPlayerDock({
     if (Number.isFinite(dur) && dur > 0) {
       tIn = clamp(tIn, 0, dur);
       tOut = clamp(tOut, 0, dur);
-      if (!(tOut > tIn)) {
-        tIn = 0;
-        tOut = dur;
-      }
+      if (!(tOut > tIn)) return;
     } else {
       tIn = Math.max(0, tIn);
     }
@@ -326,7 +312,7 @@ export function MediaPlayerDock({
         wrappingLoopRef.current = false;
       });
     }
-  }, [objectUrl, mediaEl, mediaOriginRow, originFrames]);
+  }, [objectUrl, mediaEl, mediaTimeOriginFrames]);
 
   useEffect(() => {
     if (!objectUrl || (kind !== "video" && kind !== "audio")) {
@@ -465,16 +451,9 @@ export function MediaPlayerDock({
         setPlayheadFrames(frNorm);
         return;
       }
-      const matched = mediaOriginRow();
-      let t: number;
-      if (matched) {
-        /** Gleiche 24h-Vorwärtslogik wie die Timeline (wichtig bei Nullpunkt kurz vor Mitternacht). */
-        const deltaFrames = offsetFromOriginFrame(frames, matched.recInFrames, fps);
-        t = deltaFrames / fps;
-      } else {
-        const deltaFrames = offsetFromOriginFrame(frames, Math.max(0, originFrames), fps);
-        t = deltaFrames / fps;
-      }
+      const origin = mediaTimeOriginFrames();
+      /** Gleiche 24h-Vorwärtslogik wie die Timeline (wichtig bei Nullpunkt kurz vor Mitternacht). */
+      let t = offsetFromOriginFrame(frames, origin, fps) / fps;
       if (!Number.isFinite(t)) return;
       const dur = v.duration;
       if (Number.isFinite(dur) && dur > 0) {
@@ -483,14 +462,10 @@ export function MediaPlayerDock({
         t = Math.max(0, t);
       }
       /** Sofortige Playhead-Anzeige (auch während Abspielen, bevor timeupdate nachzieht). */
-      if (matched) {
-        setPlayheadFrames(matched.recInFrames + Math.floor(t * fps));
-      } else {
-        setPlayheadFrames(originFrames + Math.floor(t * fps));
-      }
+      setPlayheadFrames(origin + Math.floor(t * fps));
       v.currentTime = t;
     },
-    [objectUrl, mediaEl, mediaOriginRow, originFrames]
+    [objectUrl, mediaEl, mediaTimeOriginFrames]
   );
 
   useEffect(() => {
