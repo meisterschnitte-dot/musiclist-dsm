@@ -139,6 +139,8 @@ type PendingZoomAdjust = {
   /** Abspielposition relativ zum Nullpunkt [0, DAY), für Zoom-Korrektur */
   playheadOffsetFromOrigin: number | null;
   span: number;
+  /** X im sichtbaren Viewport: Zoom hält die Zeit unter dem Mauszeiger. */
+  anchorViewX?: number;
 };
 
 type Props = {
@@ -407,7 +409,11 @@ export function PlaylistTimeline({
     const clientW = se.clientWidth;
     const maxSl = Math.max(0, newIw - clientW);
 
-    if (p.playheadOffsetFromOrigin != null && p.span > 0) {
+    if (p.anchorViewX != null && p.oldIw > 0) {
+      firstZoomCenterPendingRef.current = false;
+      const frac = (p.oldSl + p.anchorViewX) / p.oldIw;
+      se.scrollLeft = clamp(frac * newIw - p.anchorViewX, 0, maxSl);
+    } else if (p.playheadOffsetFromOrigin != null && p.span > 0) {
       const frac = p.playheadOffsetFromOrigin / p.span;
       if (firstZoomCenterPendingRef.current) {
         firstZoomCenterPendingRef.current = false;
@@ -483,29 +489,44 @@ export function PlaylistTimeline({
   }, [playheadOffsetFromOrigin, ensurePlayheadVisible]);
 
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    const root = timelineRootRef.current;
+    const se = scrollRef.current;
+    if (!root || !se) return;
     const handler = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.("input, textarea, select")) return;
+      const alt = e.altKey;
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (!alt && !ctrl) return;
       e.preventDefault();
-      const ie = innerRef.current;
-      if (!ie) return;
-      const { originFrames: o, span: sp, fps: fp } = rangeRef.current;
-      const ph = playheadFramesRef.current;
-      const off = offsetFromOriginFrame(ph, o, fp);
-      pendingZoomAdjustRef.current = {
-        oldIw: ie.scrollWidth,
-        oldSl: el.scrollLeft,
-        playheadFrames: ph,
-        playheadOffsetFromOrigin: off,
-        span: sp,
-      };
-      const dir = e.deltaY < 0 ? 1 : -1;
-      const factor = dir > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      setZoom((z) => clamp(Number((z * factor).toFixed(4)), ZOOM_MIN, ZOOM_MAX));
+      e.stopPropagation();
+
+      if (alt) {
+        const ie = innerRef.current;
+        if (!ie) return;
+        const rect = se.getBoundingClientRect();
+        const anchorViewX = clamp(e.clientX - rect.left, 0, se.clientWidth);
+        pendingZoomAdjustRef.current = {
+          oldIw: ie.scrollWidth,
+          oldSl: se.scrollLeft,
+          playheadFrames: playheadFramesRef.current,
+          playheadOffsetFromOrigin: null,
+          span: rangeRef.current.span,
+          anchorViewX,
+        };
+        const dir = e.deltaY < 0 ? 1 : -1;
+        const factor = dir > 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+        setZoom((z) => clamp(Number((z * factor).toFixed(4)), ZOOM_MIN, ZOOM_MAX));
+        return;
+      }
+
+      let d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (e.deltaMode === 1) d *= 24;
+      else if (e.deltaMode === 2) d *= se.clientWidth;
+      se.scrollLeft += d;
     };
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
+    root.addEventListener("wheel", handler, { passive: false });
+    return () => root.removeEventListener("wheel", handler);
   }, []);
 
   const seekFromTimelineOffset = useCallback(
@@ -675,7 +696,7 @@ export function PlaylistTimeline({
       tabIndex={0}
       className="playlist-timeline"
       aria-label="Playlist-Timeline"
-      title="Klick in die Timeline: Fokus · Pfeil ↑/↓ oder Strg+Mausrad: Zoom (erstes Zoomen zentriert den Standanzeiger)"
+      title="Klick: Fokus · Alt+Mausrad: Zoom · Strg+Mausrad: horizontal verschieben · Pfeil ↑/↓: Zoom"
       onPointerDownCapture={onTimelinePointerDownCapture}
     >
       <div className="playlist-timeline__toolbar">
