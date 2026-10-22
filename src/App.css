@@ -4495,6 +4495,16 @@ body {
   outline: none;
 }
 
+.tags-ctx-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tags-ctx-menu-item:disabled:hover,
+.tags-ctx-menu-item:disabled:focus-visible {
+  background: transparent;
+}
+
 .tags-ctx-menu-item--border {
   border-top: 1px solid var(--app-border);
   margin-top: 0.1rem;

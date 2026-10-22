@@ -94,6 +94,21 @@ function findPlaylistRowForFileName(
   return null;
 }
 
+function findPlaylistRowById(
+  playlist: PlaylistEntry[] | null,
+  entryId: string | null | undefined
+): PlaylistEntry | null {
+  if (!playlist?.length || !entryId) return null;
+  return playlist.find((r) => r.id === entryId) ?? null;
+}
+
+export type LoopClipRequest = {
+  entryId: string;
+  recInFrames: number;
+  recOutFrames: number;
+  requestId: number;
+};
+
 /**
  * Lokaler Mediaplayer (MP3, WAV, MP4) unter der Musikdatenbank. WAV und MP4 teilen
  * dasselbe Anzeigefenster (HTML-Video) und die Timeline; MP3 bleibt die kompakte Vorschau.
@@ -105,6 +120,9 @@ export function MediaPlayerDock({
   tagIncompleteByEntryId = null,
   onTimelineClipSelectEntryId = null,
   seekToProgramFramesRequest = null,
+  loopClipRequest = null,
+  stopClipLoopRequest = null,
+  onClipLoopPlayingChange = null,
 }: {
   playlist?: PlaylistEntry[] | null;
   /** Anzeige über der Timeline (z. B. geladene .list / EDL-Name). */
@@ -115,6 +133,12 @@ export function MediaPlayerDock({
   onTimelineClipSelectEntryId?: ((entryId: string) => void) | null;
   /** Bei Klick auf einen Playlist-Track: Programm-TC springen (`requestId` bei jedem Klick erhöhen). */
   seekToProgramFramesRequest?: { programFrames: number; requestId: number } | null;
+  /** Playlist-Kontextmenü „Play in Loop“: Clip In→Out wiederholen, bis Pause/Leertaste. */
+  loopClipRequest?: LoopClipRequest | null;
+  /** Loop beenden und Wiedergabe pausieren (`requestId` bei jedem Stop erhöhen). */
+  stopClipLoopRequest?: { requestId: number } | null;
+  /** Aktiv, solange der Clip in der Timeline-Schleife läuft. */
+  onClipLoopPlayingChange?: ((playing: boolean) => void) | null;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
@@ -130,6 +154,35 @@ export function MediaPlayerDock({
   const rowRef = useRef<HTMLDivElement | null>(null);
   const videoResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [videoSlotDragOver, setVideoSlotDragOver] = useState(false);
+  const clipLoopRef = useRef<{
+    inFrames: number;
+    outFrames: number;
+    entryId: string;
+  } | null>(null);
+  const lastLoopRequestIdRef = useRef(0);
+  const lastSeekRequestIdRef = useRef(0);
+  const lastStopRequestIdRef = useRef(0);
+  const wrappingLoopRef = useRef(false);
+  const onClipLoopPlayingChangeRef = useRef(onClipLoopPlayingChange);
+  onClipLoopPlayingChangeRef.current = onClipLoopPlayingChange;
+
+  const stopClipLoop = useCallback((opts?: { pause?: boolean }) => {
+    const wasLooping = clipLoopRef.current != null;
+    clipLoopRef.current = null;
+    if (wasLooping) onClipLoopPlayingChangeRef.current?.(false);
+    if (opts?.pause) {
+      const v = videoRef.current;
+      if (v && !v.paused && !v.ended) v.pause();
+    }
+  }, []);
+
+  const mediaOriginRow = useCallback((): PlaylistEntry | null => {
+    const loop = clipLoopRef.current;
+    return (
+      findPlaylistRowById(playlist, loop?.entryId) ??
+      findPlaylistRowForFileName(playlist, label)
+    );
+  }, [playlist, label]);
 
   /** Beim Öffnen einer anderen Playlist: Start-TC = Stunde des ersten Eintrags, sonst 00:00:00. Nur bei Wechsel des Dokumenttitels, damit manuelle Eingabe erhalten bleibt. */
   useEffect(() => {
@@ -226,7 +279,7 @@ export function MediaPlayerDock({
     }
     const t = v.currentTime;
     const fps = DEFAULT_FPS;
-    const matched = findPlaylistRowForFileName(playlist, label);
+    const matched = mediaOriginRow();
     let fr: number;
     if (matched) {
       fr = matched.recInFrames + Math.floor(t * fps);
@@ -234,7 +287,39 @@ export function MediaPlayerDock({
       fr = originFrames + Math.floor(t * fps);
     }
     setPlayheadFrames(fr);
-  }, [kind, objectUrl, playlist, label, originFrames]);
+  }, [kind, objectUrl, mediaOriginRow, originFrames]);
+
+  const wrapClipLoopIfNeeded = useCallback(() => {
+    const loop = clipLoopRef.current;
+    const v = videoRef.current;
+    if (!loop || !v || kind !== "video" || !objectUrl) return;
+    const fps = DEFAULT_FPS;
+    const originRow = mediaOriginRow();
+    const origin = originRow ? originRow.recInFrames : Math.max(0, originFrames);
+    let tIn = offsetFromOriginFrame(loop.inFrames, origin, fps) / fps;
+    let tOut = offsetFromOriginFrame(loop.outFrames, origin, fps) / fps;
+    if (!Number.isFinite(tIn) || !Number.isFinite(tOut) || !(tOut > tIn)) return;
+    const dur = v.duration;
+    if (Number.isFinite(dur) && dur > 0) {
+      tIn = clamp(tIn, 0, dur);
+      tOut = clamp(tOut, 0, dur);
+      if (!(tOut > tIn)) {
+        tIn = 0;
+        tOut = dur;
+      }
+    } else {
+      tIn = Math.max(0, tIn);
+    }
+    const eps = 1 / fps;
+    if (v.ended || v.currentTime >= tOut - eps) {
+      wrappingLoopRef.current = true;
+      v.currentTime = tIn;
+      const resume = v.paused || v.ended ? v.play() : Promise.resolve();
+      void Promise.resolve(resume).finally(() => {
+        wrappingLoopRef.current = false;
+      });
+    }
+  }, [kind, objectUrl, mediaOriginRow, originFrames]);
 
   useEffect(() => {
     if (kind !== "video" || !objectUrl) {
@@ -245,6 +330,7 @@ export function MediaPlayerDock({
 
     let raf = 0;
     const loop = () => {
+      wrapClipLoopIfNeeded();
       updatePlayhead();
       if (!v.paused && !v.ended) {
         raf = requestAnimationFrame(loop);
@@ -259,17 +345,32 @@ export function MediaPlayerDock({
     const onPause = () => {
       cancelAnimationFrame(raf);
       updatePlayhead();
+      if (wrappingLoopRef.current) return;
+      if (v.ended && clipLoopRef.current) {
+        wrapClipLoopIfNeeded();
+        return;
+      }
+      stopClipLoop();
     };
 
     const onEnded = () => {
       cancelAnimationFrame(raf);
+      if (clipLoopRef.current) {
+        wrapClipLoopIfNeeded();
+        return;
+      }
+      updatePlayhead();
+    };
+
+    const onTimeUpdate = () => {
+      wrapClipLoopIfNeeded();
       updatePlayhead();
     };
 
     v.addEventListener("play", onPlay);
     v.addEventListener("pause", onPause);
     v.addEventListener("ended", onEnded);
-    v.addEventListener("timeupdate", updatePlayhead);
+    v.addEventListener("timeupdate", onTimeUpdate);
     v.addEventListener("seeked", updatePlayhead);
     updatePlayhead();
 
@@ -278,10 +379,10 @@ export function MediaPlayerDock({
       v.removeEventListener("play", onPlay);
       v.removeEventListener("pause", onPause);
       v.removeEventListener("ended", onEnded);
-      v.removeEventListener("timeupdate", updatePlayhead);
+      v.removeEventListener("timeupdate", onTimeUpdate);
       v.removeEventListener("seeked", updatePlayhead);
     };
-  }, [kind, objectUrl, updatePlayhead]);
+  }, [kind, objectUrl, updatePlayhead, wrapClipLoopIfNeeded, stopClipLoop]);
 
   useEffect(() => {
     updatePlayhead();
@@ -289,13 +390,14 @@ export function MediaPlayerDock({
 
   const applyMediaFile = useCallback((f: File) => {
     if (!isAllowedMediaFile(f)) return;
+    stopClipLoop();
     setObjectUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return URL.createObjectURL(f);
     });
     setLabel(f.name);
     setKind(guessKind(f));
-  }, []);
+  }, [stopClipLoop]);
 
   const onFile = useCallback(
     (e: ChangeEvent<HTMLInputElement>) => {
@@ -336,6 +438,7 @@ export function MediaPlayerDock({
   );
 
   const clear = useCallback(() => {
+    stopClipLoop();
     setObjectUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return null;
@@ -344,7 +447,7 @@ export function MediaPlayerDock({
     setKind(null);
     setPlayheadFrames(null);
     setMediaDurationSec(null);
-  }, []);
+  }, [stopClipLoop]);
 
   const seekProgramFrames = useCallback(
     (frames: number) => {
@@ -355,7 +458,7 @@ export function MediaPlayerDock({
         setPlayheadFrames(frNorm);
         return;
       }
-      const matched = findPlaylistRowForFileName(playlist, label);
+      const matched = mediaOriginRow();
       let t: number;
       if (matched) {
         /** Gleiche 24h-Vorwärtslogik wie die Timeline (wichtig bei Nullpunkt kurz vor Mitternacht). */
@@ -380,13 +483,40 @@ export function MediaPlayerDock({
       }
       v.currentTime = t;
     },
-    [kind, objectUrl, playlist, label, originFrames]
+    [kind, objectUrl, mediaOriginRow, originFrames]
   );
 
   useEffect(() => {
     if (!seekToProgramFramesRequest) return;
+    const id = seekToProgramFramesRequest.requestId;
+    if (lastSeekRequestIdRef.current !== id) {
+      lastSeekRequestIdRef.current = id;
+      stopClipLoop();
+    }
     seekProgramFrames(seekToProgramFramesRequest.programFrames);
-  }, [seekToProgramFramesRequest?.requestId, seekProgramFrames]);
+  }, [seekToProgramFramesRequest?.requestId, seekProgramFrames, stopClipLoop]);
+
+  useEffect(() => {
+    if (!loopClipRequest) return;
+    const { recInFrames, recOutFrames, entryId, requestId } = loopClipRequest;
+    if (lastLoopRequestIdRef.current === requestId) return;
+    lastLoopRequestIdRef.current = requestId;
+    if (recOutFrames <= recInFrames) return;
+    clipLoopRef.current = { inFrames: recInFrames, outFrames: recOutFrames, entryId };
+    onClipLoopPlayingChangeRef.current?.(true);
+    seekProgramFrames(recInFrames);
+    const v = videoRef.current;
+    if (!v || kind !== "video" || !objectUrl) return;
+    void v.play();
+  }, [loopClipRequest?.requestId, seekProgramFrames, kind, objectUrl]);
+
+  useEffect(() => {
+    if (!stopClipLoopRequest) return;
+    const id = stopClipLoopRequest.requestId;
+    if (lastStopRequestIdRef.current === id) return;
+    lastStopRequestIdRef.current = id;
+    stopClipLoop({ pause: true });
+  }, [stopClipLoopRequest?.requestId, stopClipLoop]);
 
   useEffect(() => {
     if (kind !== "video" || !objectUrl) return;
@@ -399,12 +529,13 @@ export function MediaPlayerDock({
       if (v.paused || v.ended) {
         void v.play();
       } else {
+        stopClipLoop();
         v.pause();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [kind, objectUrl]);
+  }, [kind, objectUrl, stopClipLoop]);
 
   return (
     <div className="media-player-dock" aria-label="Mediaplayer">
@@ -469,6 +600,7 @@ export function MediaPlayerDock({
                     controls
                     playsInline
                     preload="metadata"
+                    loop={false}
                   />
                 ) : (
                   <div className="media-player-dock__video-placeholder-stack">

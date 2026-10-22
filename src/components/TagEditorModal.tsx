@@ -280,6 +280,11 @@ type Props = {
   ) => Record<Mp3TableColumnId, string>;
   onClose: () => void;
   onSave: OnSaveTag;
+  /** Playlist-Clip (WAV/MP4) im Tag-Fenster In→Out in einer Schleife abspielen. */
+  clipLoopAvailable?: boolean;
+  clipLoopPlaying?: boolean;
+  onClipLoopPlay?: () => void;
+  onClipLoopStop?: () => void;
 };
 
 export function TagEditorModal({
@@ -298,6 +303,10 @@ export function TagEditorModal({
   getManualMusicDbRowCells,
   onClose,
   onSave,
+  clipLoopAvailable = false,
+  clipLoopPlaying = false,
+  onClipLoopPlay,
+  onClipLoopStop,
 }: Props) {
   const [form, setForm] = useState(() => formFromMerged(initial));
   const [warnToggle, setWarnToggle] = useState(() => warnungEffective(initial));
@@ -1283,6 +1292,26 @@ export function TagEditorModal({
             <div className="modal-actions--tag-left" aria-hidden />
           )}
           <div className="modal-actions--tag-right">
+            {clipLoopAvailable && onClipLoopPlay && onClipLoopStop ? (
+              <button
+                type="button"
+                className="btn-modal"
+                title={
+                  clipLoopPlaying
+                    ? "Loop beenden und Wiedergabe pausieren."
+                    : "Diesen Clip gemäß Timeline In/Out in einer Schleife abspielen."
+                }
+                onKeyDown={(e) => {
+                  if (e.key === " " || e.code === "Space") e.stopPropagation();
+                }}
+                onClick={() => {
+                  if (clipLoopPlaying) onClipLoopStop();
+                  else onClipLoopPlay();
+                }}
+              >
+                {clipLoopPlaying ? "Stop" : "Play"}
+              </button>
+            ) : null}
             <button type="button" className="btn-modal" onClick={onClose}>
               Abbrechen
             </button>

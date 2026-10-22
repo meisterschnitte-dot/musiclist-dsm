@@ -523,6 +523,19 @@ function isMp3FileName(name: string): boolean {
   return basenamePath(name).toLowerCase().endsWith(".mp3");
 }
 
+/** WAV/MP4 und ähnliche Timeline-Medien für „Play in Loop“. */
+function isTimelineLoopableMediaFileName(name: string): boolean {
+  const base = basenamePath(name).toLowerCase();
+  return (
+    base.endsWith(".mp4") ||
+    base.endsWith(".m4v") ||
+    base.endsWith(".mov") ||
+    base.endsWith(".webm") ||
+    base.endsWith(".wav") ||
+    base.endsWith(".wave")
+  );
+}
+
 /** Ordnerpfad / Dateiname am letzten Pfadtrenner (Duplikat-Dialog). */
 function splitPathForDupModal(raw: string): { dir: string; base: string } {
   const t = raw.trim().replace(/\\/g, "/");
@@ -909,6 +922,30 @@ export default function App() {
     programFrames: number;
     requestId: number;
   } | null>(null);
+  const loopClipRequestIdRef = useRef(0);
+  const [loopClipRequest, setLoopClipRequest] = useState<{
+    entryId: string;
+    recInFrames: number;
+    recOutFrames: number;
+    requestId: number;
+  } | null>(null);
+  const stopClipLoopRequestIdRef = useRef(0);
+  const [stopClipLoopRequest, setStopClipLoopRequest] = useState<{
+    requestId: number;
+  } | null>(null);
+  const [clipLoopPlaying, setClipLoopPlaying] = useState(false);
+  const startPlaylistClipLoop = useCallback((row: PlaylistEntry) => {
+    if (row.recOutFrames <= row.recInFrames) return;
+    setLoopClipRequest({
+      entryId: row.id,
+      recInFrames: row.recInFrames,
+      recOutFrames: row.recOutFrames,
+      requestId: ++loopClipRequestIdRef.current,
+    });
+  }, []);
+  const requestStopPlaylistClipLoop = useCallback(() => {
+    setStopClipLoopRequest({ requestId: ++stopClipLoopRequestIdRef.current });
+  }, []);
   /** Mehrfachauswahl Musikdatenbank: Dateinamen. */
   const [mp3SelectedNames, setMp3SelectedNames] = useState<Set<string>>(() => new Set());
   /** Anker für Shift-Bereich: Dateiname. */
@@ -5772,6 +5809,9 @@ Oliver`,
                       tagIncompleteByEntryId={playlistTagIncompleteByEntryId}
                       onTimelineClipSelectEntryId={selectPlaylistEntryFromTimeline}
                       seekToProgramFramesRequest={edlSeekToProgramFramesRequest}
+                      loopClipRequest={loopClipRequest}
+                      stopClipLoopRequest={stopClipLoopRequest}
+                      onClipLoopPlayingChange={setClipLoopPlaying}
                     />
                   </div>
                 </div>
@@ -6197,6 +6237,9 @@ Oliver`,
                 tagIncompleteByEntryId={playlistTagIncompleteByEntryId}
                 onTimelineClipSelectEntryId={selectPlaylistEntryFromTimeline}
                 seekToProgramFramesRequest={edlSeekToProgramFramesRequest}
+                loopClipRequest={loopClipRequest}
+                stopClipLoopRequest={stopClipLoopRequest}
+                onClipLoopPlayingChange={setClipLoopPlaying}
               />
             </div>
             )}
@@ -6343,6 +6386,36 @@ Oliver`,
                       : `Refresh Tags (${tagsCtxMenu.deleteTargets.length}) …`}
                 </button>
               )}
+            {tagsCtxMenu.kind === "playlist" &&
+              (() => {
+                const loopRow = playlist?.[tagsCtxMenu.index];
+                const linked = loopRow?.linkedTrackFileName?.trim();
+                if (!loopRow || !linked || !isTimelineLoopableMediaFileName(linked)) return null;
+                const canLoop = loopRow.recOutFrames > loopRow.recInFrames;
+                return (
+                  <button
+                    type="button"
+                    className="tags-ctx-menu-item tags-ctx-menu-item--border"
+                    role="menuitem"
+                    disabled={!canLoop}
+                    title={
+                      canLoop
+                        ? "Diesen Clip gemäß Timeline In/Out in einer Schleife abspielen. Pause oder Leertaste beendet den Loop."
+                        : "Für diesen Eintrag ist keine gültige Timeline-Dauer (In/Out) gesetzt."
+                    }
+                    onClick={() => {
+                      const m = tagsCtxMenu;
+                      if (m?.kind !== "playlist") return;
+                      const row = playlist?.[m.index];
+                      if (!row || row.recOutFrames <= row.recInFrames) return;
+                      setTagsCtxMenu(null);
+                      startPlaylistClipLoop(row);
+                    }}
+                  >
+                    Play in Loop
+                  </button>
+                );
+              })()}
             {tagsCtxMenu.kind === "playlist" &&
               playlist?.[tagsCtxMenu.index]?.linkedTrackFileName && (
                 <>
@@ -6501,6 +6574,24 @@ Oliver`,
           getManualMusicDbRowCells={getManualMusicDbRowDisplayCells}
           onClose={closeTagModal}
           onSave={saveTagModal}
+          clipLoopAvailable={(() => {
+            if (tagModal.kind !== "playlist" || !playlist) return false;
+            const row = playlist[tagModal.index];
+            const linked = row?.linkedTrackFileName?.trim();
+            return !!(
+              row &&
+              linked &&
+              isTimelineLoopableMediaFileName(linked) &&
+              row.recOutFrames > row.recInFrames
+            );
+          })()}
+          clipLoopPlaying={clipLoopPlaying}
+          onClipLoopPlay={() => {
+            if (tagModal.kind !== "playlist") return;
+            const row = playlist?.[tagModal.index];
+            if (row) startPlaylistClipLoop(row);
+          }}
+          onClipLoopStop={requestStopPlaylistClipLoop}
         />
       )}
 
