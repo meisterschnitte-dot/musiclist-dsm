@@ -141,6 +141,7 @@ export function MediaPlayerDock({
   onClipLoopPlayingChange?: ((playing: boolean) => void) | null;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [kind, setKind] = useState<MediaKind>(null);
@@ -166,13 +167,19 @@ export function MediaPlayerDock({
   const onClipLoopPlayingChangeRef = useRef(onClipLoopPlayingChange);
   onClipLoopPlayingChangeRef.current = onClipLoopPlayingChange;
 
+  const mediaEl = useCallback((): HTMLMediaElement | null => {
+    if (kind === "audio") return audioRef.current;
+    if (kind === "video") return videoRef.current;
+    return videoRef.current ?? audioRef.current;
+  }, [kind]);
+
   const stopClipLoop = useCallback((opts?: { pause?: boolean }) => {
     const wasLooping = clipLoopRef.current != null;
     clipLoopRef.current = null;
     if (wasLooping) onClipLoopPlayingChangeRef.current?.(false);
     if (opts?.pause) {
-      const v = videoRef.current;
-      if (v && !v.paused && !v.ended) v.pause();
+      const el = videoRef.current ?? audioRef.current;
+      if (el && !el.paused && !el.ended) el.pause();
     }
   }, []);
 
@@ -253,31 +260,31 @@ export function MediaPlayerDock({
   }, [objectUrl]);
 
   useLayoutEffect(() => {
-    if (kind !== "video" || !objectUrl) {
+    if (!objectUrl || (kind !== "video" && kind !== "audio")) {
       setMediaDurationSec(null);
       return;
     }
-    const v = videoRef.current;
-    if (!v) return;
+    const el = kind === "audio" ? audioRef.current : videoRef.current;
+    if (!el) return;
     const upd = () => {
-      const d = v.duration;
+      const d = el.duration;
       setMediaDurationSec(Number.isFinite(d) && d > 0 ? d : null);
     };
-    v.addEventListener("loadedmetadata", upd);
-    v.addEventListener("durationchange", upd);
+    el.addEventListener("loadedmetadata", upd);
+    el.addEventListener("durationchange", upd);
     upd();
     return () => {
-      v.removeEventListener("loadedmetadata", upd);
-      v.removeEventListener("durationchange", upd);
+      el.removeEventListener("loadedmetadata", upd);
+      el.removeEventListener("durationchange", upd);
     };
   }, [kind, objectUrl]);
 
   const updatePlayhead = useCallback(() => {
-    const v = videoRef.current;
-    if (!v || kind !== "video" || !objectUrl) {
+    const el = mediaEl();
+    if (!el || !objectUrl) {
       return;
     }
-    const t = v.currentTime;
+    const t = el.currentTime;
     const fps = DEFAULT_FPS;
     const matched = mediaOriginRow();
     let fr: number;
@@ -287,19 +294,19 @@ export function MediaPlayerDock({
       fr = originFrames + Math.floor(t * fps);
     }
     setPlayheadFrames(fr);
-  }, [kind, objectUrl, mediaOriginRow, originFrames]);
+  }, [objectUrl, mediaEl, mediaOriginRow, originFrames]);
 
   const wrapClipLoopIfNeeded = useCallback(() => {
     const loop = clipLoopRef.current;
-    const v = videoRef.current;
-    if (!loop || !v || kind !== "video" || !objectUrl) return;
+    const el = mediaEl();
+    if (!loop || !el || !objectUrl) return;
     const fps = DEFAULT_FPS;
     const originRow = mediaOriginRow();
     const origin = originRow ? originRow.recInFrames : Math.max(0, originFrames);
     let tIn = offsetFromOriginFrame(loop.inFrames, origin, fps) / fps;
     let tOut = offsetFromOriginFrame(loop.outFrames, origin, fps) / fps;
     if (!Number.isFinite(tIn) || !Number.isFinite(tOut) || !(tOut > tIn)) return;
-    const dur = v.duration;
+    const dur = el.duration;
     if (Number.isFinite(dur) && dur > 0) {
       tIn = clamp(tIn, 0, dur);
       tOut = clamp(tOut, 0, dur);
@@ -311,21 +318,21 @@ export function MediaPlayerDock({
       tIn = Math.max(0, tIn);
     }
     const eps = 1 / fps;
-    if (v.ended || v.currentTime >= tOut - eps) {
+    if (el.ended || el.currentTime >= tOut - eps) {
       wrappingLoopRef.current = true;
-      v.currentTime = tIn;
-      const resume = v.paused || v.ended ? v.play() : Promise.resolve();
+      el.currentTime = tIn;
+      const resume = el.paused || el.ended ? el.play() : Promise.resolve();
       void Promise.resolve(resume).finally(() => {
         wrappingLoopRef.current = false;
       });
     }
-  }, [kind, objectUrl, mediaOriginRow, originFrames]);
+  }, [objectUrl, mediaEl, mediaOriginRow, originFrames]);
 
   useEffect(() => {
-    if (kind !== "video" || !objectUrl) {
+    if (!objectUrl || (kind !== "video" && kind !== "audio")) {
       return;
     }
-    const v = videoRef.current;
+    const v = mediaEl();
     if (!v) return;
 
     let raf = 0;
@@ -382,7 +389,7 @@ export function MediaPlayerDock({
       v.removeEventListener("timeupdate", onTimeUpdate);
       v.removeEventListener("seeked", updatePlayhead);
     };
-  }, [kind, objectUrl, updatePlayhead, wrapClipLoopIfNeeded, stopClipLoop]);
+  }, [kind, objectUrl, mediaEl, updatePlayhead, wrapClipLoopIfNeeded, stopClipLoop]);
 
   useEffect(() => {
     updatePlayhead();
@@ -453,8 +460,8 @@ export function MediaPlayerDock({
     (frames: number) => {
       const fps = DEFAULT_FPS;
       const frNorm = normalizeFramesToDay(frames, fps);
-      const v = videoRef.current;
-      if (!v || kind !== "video" || !objectUrl) {
+      const v = mediaEl();
+      if (!v || !objectUrl) {
         setPlayheadFrames(frNorm);
         return;
       }
@@ -483,7 +490,7 @@ export function MediaPlayerDock({
       }
       v.currentTime = t;
     },
-    [kind, objectUrl, mediaOriginRow, originFrames]
+    [objectUrl, mediaEl, mediaOriginRow, originFrames]
   );
 
   useEffect(() => {
@@ -505,10 +512,10 @@ export function MediaPlayerDock({
     clipLoopRef.current = { inFrames: recInFrames, outFrames: recOutFrames, entryId };
     onClipLoopPlayingChangeRef.current?.(true);
     seekProgramFrames(recInFrames);
-    const v = videoRef.current;
-    if (!v || kind !== "video" || !objectUrl) return;
-    void v.play();
-  }, [loopClipRequest?.requestId, seekProgramFrames, kind, objectUrl]);
+    const el = mediaEl();
+    if (!el || !objectUrl) return;
+    void el.play();
+  }, [loopClipRequest?.requestId, seekProgramFrames, mediaEl, objectUrl]);
 
   useEffect(() => {
     if (!stopClipLoopRequest) return;
@@ -519,23 +526,23 @@ export function MediaPlayerDock({
   }, [stopClipLoopRequest?.requestId, stopClipLoop]);
 
   useEffect(() => {
-    if (kind !== "video" || !objectUrl) return;
+    if (!objectUrl || (kind !== "video" && kind !== "audio")) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== " " && e.code !== "Space") return;
       if (shouldIgnoreGlobalSpaceShortcut(e.target)) return;
-      const v = videoRef.current;
-      if (!v) return;
+      const el = mediaEl();
+      if (!el) return;
       e.preventDefault();
-      if (v.paused || v.ended) {
-        void v.play();
+      if (el.paused || el.ended) {
+        void el.play();
       } else {
         stopClipLoop();
-        v.pause();
+        el.pause();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [kind, objectUrl, stopClipLoop]);
+  }, [kind, objectUrl, mediaEl, stopClipLoop]);
 
   return (
     <div className="media-player-dock" aria-label="Mediaplayer">
@@ -650,7 +657,14 @@ export function MediaPlayerDock({
         <div className="media-player-dock__side">
           <div className="media-player-dock__audio-col">
             {kind === "audio" && objectUrl ? (
-              <audio className="media-player-dock__audio" src={objectUrl} controls preload="metadata" />
+              <audio
+                ref={audioRef}
+                className="media-player-dock__audio"
+                src={objectUrl}
+                controls
+                preload="metadata"
+                loop={false}
+              />
             ) : null}
           </div>
           <PlaylistTimeline
@@ -662,7 +676,7 @@ export function MediaPlayerDock({
             originFrames={originFrames}
             onOriginFramesChange={setOriginFrames}
             playheadFrames={playheadFrames}
-            seekEnabled={kind === "video" && !!objectUrl}
+            seekEnabled={(kind === "video" || kind === "audio") && !!objectUrl}
             onSeekProgramFrames={seekProgramFrames}
           />
         </div>

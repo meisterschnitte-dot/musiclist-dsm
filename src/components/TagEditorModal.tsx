@@ -280,8 +280,9 @@ type Props = {
   ) => Record<Mp3TableColumnId, string>;
   onClose: () => void;
   onSave: OnSaveTag;
-  /** Playlist-Clip (WAV/MP4) im Tag-Fenster In→Out in einer Schleife abspielen. */
+  /** Playlist-Clip im Tag-Fenster In→Out in einer Schleife abspielen. */
   clipLoopAvailable?: boolean;
+  clipLoopDisabled?: boolean;
   clipLoopPlaying?: boolean;
   onClipLoopPlay?: () => void;
   onClipLoopStop?: () => void;
@@ -304,6 +305,7 @@ export function TagEditorModal({
   onClose,
   onSave,
   clipLoopAvailable = false,
+  clipLoopDisabled = false,
   clipLoopPlaying = false,
   onClipLoopPlay,
   onClipLoopStop,
@@ -1296,17 +1298,20 @@ export function TagEditorModal({
               <button
                 type="button"
                 className="btn-modal"
+                disabled={clipLoopDisabled && !clipLoopPlaying}
                 title={
                   clipLoopPlaying
                     ? "Loop beenden und Wiedergabe pausieren."
-                    : "Diesen Clip gemäß Timeline In/Out in einer Schleife abspielen."
+                    : clipLoopDisabled
+                      ? "Für diesen Eintrag ist keine gültige Timeline-Dauer (In/Out) gesetzt."
+                      : "Diesen Clip gemäß Timeline In/Out in einer Schleife abspielen."
                 }
                 onKeyDown={(e) => {
                   if (e.key === " " || e.code === "Space") e.stopPropagation();
                 }}
                 onClick={() => {
                   if (clipLoopPlaying) onClipLoopStop();
-                  else onClipLoopPlay();
+                  else if (!clipLoopDisabled) onClipLoopPlay();
                 }}
               >
                 {clipLoopPlaying ? "Stop" : "Play"}

@@ -523,17 +523,9 @@ function isMp3FileName(name: string): boolean {
   return basenamePath(name).toLowerCase().endsWith(".mp3");
 }
 
-/** WAV/MP4 und ähnliche Timeline-Medien für „Play in Loop“. */
-function isTimelineLoopableMediaFileName(name: string): boolean {
-  const base = basenamePath(name).toLowerCase();
-  return (
-    base.endsWith(".mp4") ||
-    base.endsWith(".m4v") ||
-    base.endsWith(".mov") ||
-    base.endsWith(".webm") ||
-    base.endsWith(".wav") ||
-    base.endsWith(".wave")
-  );
+/** Clip hat eine gültige Timeline-Dauer (In < Out) für Play in Loop. */
+function playlistRowCanClipLoop(row: PlaylistEntry | undefined | null): row is PlaylistEntry {
+  return !!row && row.recOutFrames > row.recInFrames;
 }
 
 /** Ordnerpfad / Dateiname am letzten Pfadtrenner (Duplikat-Dialog). */
@@ -6389,9 +6381,7 @@ Oliver`,
             {tagsCtxMenu.kind === "playlist" &&
               (() => {
                 const loopRow = playlist?.[tagsCtxMenu.index];
-                const linked = loopRow?.linkedTrackFileName?.trim();
-                if (!loopRow || !linked || !isTimelineLoopableMediaFileName(linked)) return null;
-                const canLoop = loopRow.recOutFrames > loopRow.recInFrames;
+                const canLoop = playlistRowCanClipLoop(loopRow);
                 return (
                   <button
                     type="button"
@@ -6407,7 +6397,7 @@ Oliver`,
                       const m = tagsCtxMenu;
                       if (m?.kind !== "playlist") return;
                       const row = playlist?.[m.index];
-                      if (!row || row.recOutFrames <= row.recInFrames) return;
+                      if (!playlistRowCanClipLoop(row)) return;
                       setTagsCtxMenu(null);
                       startPlaylistClipLoop(row);
                     }}
@@ -6574,17 +6564,10 @@ Oliver`,
           getManualMusicDbRowCells={getManualMusicDbRowDisplayCells}
           onClose={closeTagModal}
           onSave={saveTagModal}
-          clipLoopAvailable={(() => {
-            if (tagModal.kind !== "playlist" || !playlist) return false;
-            const row = playlist[tagModal.index];
-            const linked = row?.linkedTrackFileName?.trim();
-            return !!(
-              row &&
-              linked &&
-              isTimelineLoopableMediaFileName(linked) &&
-              row.recOutFrames > row.recInFrames
-            );
-          })()}
+          clipLoopAvailable={tagModal.kind === "playlist"}
+          clipLoopDisabled={
+            tagModal.kind !== "playlist" || !playlistRowCanClipLoop(playlist?.[tagModal.index])
+          }
           clipLoopPlaying={clipLoopPlaying}
           onClipLoopPlay={() => {
             if (tagModal.kind !== "playlist") return;
