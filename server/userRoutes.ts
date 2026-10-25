@@ -18,7 +18,14 @@ import {
 } from "./userStore";
 import { syncCustomerForInvite } from "./customerUserSync";
 import { readUserSessionPresenceMap } from "./userSessionSyncFs";
-import { toPublicUser, type PublicUser, type UserRole, type StoredUser } from "./userTypes";
+import {
+  hasMusiclistAccess,
+  hasPlayerAccess,
+  toPublicUser,
+  type PublicUser,
+  type UserRole,
+  type StoredUser,
+} from "./userTypes";
 
 type BootstrapMutResult =
   | { ok: false; code: number; error: string }
@@ -246,6 +253,14 @@ export function createUserApiRouter(): Router {
     }
     const activeInBody = typeof req.body?.active === "boolean";
     const activeResolved = activeInBody ? Boolean(req.body.active) : isUserActive(target);
+    const musiclistAccessResolved =
+      typeof req.body?.musiclistAccess === "boolean" ? Boolean(req.body.musiclistAccess) : hasMusiclistAccess(target);
+    const playerAccessResolved =
+      typeof req.body?.playerAccess === "boolean" ? Boolean(req.body.playerAccess) : hasPlayerAccess(target);
+    if (role !== "admin" && !musiclistAccessResolved && !playerAccessResolved) {
+      res.status(400).json({ error: "Mindestens Musiclist oder Musicplayer muss freigegeben sein." });
+      return;
+    }
     const selfId = req.authUser!.id;
     if (!activeResolved && id === selfId) {
       res.status(400).json({ error: "Das eigene Konto kann nicht deaktiviert werden." });
@@ -332,6 +347,8 @@ export function createUserApiRouter(): Router {
           companyName: companyNameStored,
           customerId: customerIdResolved,
           active: activeResolved,
+          musiclistAccess: musiclistAccessResolved,
+          playerAccess: playerAccessResolved,
         };
         return { next, result: { ok: true as const, user: toPublicUser(next[ix]) } };
       });

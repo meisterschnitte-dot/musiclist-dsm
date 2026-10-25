@@ -19,6 +19,7 @@ import {
 } from "./customerPlaylistAssignmentsFs";
 import { removePlaylistPendingForRef } from "./customerPlaylistPendingFs";
 import { createCustomersRouter } from "./customersRoutes";
+import { createPlayerCatalogRouter } from "./playerCatalogRoutes";
 import { createUserApiRouter } from "./userRoutes";
 import { createBlankframeRouter } from "./blankframeRoutes";
 import { createUserSessionSyncRouter } from "./userSessionSyncRoutes";
@@ -142,6 +143,7 @@ const authLimiter = rateLimit({
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/bootstrap", authLimiter);
 
+app.use("/api", createPlayerCatalogRouter());
 app.use("/api", createUserApiRouter());
 app.use("/api", createUserSessionSyncRouter());
 app.use("/api", createBlankframeRouter());

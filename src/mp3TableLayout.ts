@@ -2,7 +2,7 @@ import {
   AUDIO_TAG_FIELD_LABELS,
   AUDIO_TAG_TABLE_COLUMN_KEYS,
 } from "./audio/audioTags";
-import { TAG_COLUMN_MIN_WIDTHS } from "./tableColumnLayout";
+import { TABLE_COL_WIDTH_MAX, TAG_COLUMN_MIN_WIDTHS } from "./tableColumnLayout";
 
 const LS_KEY = "musiclist-mp3-table-layout-v1";
 
@@ -50,18 +50,8 @@ export function mp3ResizeMinForColumnId(id: Mp3TableColumnId): number {
   return TAG_COLUMN_MIN_WIDTHS[id] ?? 28;
 }
 
-export function mp3ColumnWidthMax(id: Mp3TableColumnId): number {
-  switch (id) {
-    case "num":
-      return 120;
-    case "filename":
-      return 5600;
-    case "created":
-    case "edited":
-      return 220;
-    default:
-      return 4000;
-  }
+export function mp3ColumnWidthMax(_id: Mp3TableColumnId): number {
+  return TABLE_COL_WIDTH_MAX;
 }
 
 export function sanitizeMp3ColumnWidths(
@@ -156,7 +146,7 @@ export function loadMp3TableLayout(): Mp3TableLayoutState {
     if (parsed.widths && typeof parsed.widths === "object") {
       for (const id of MP3_TABLE_ALL_COLUMN_IDS) {
         const w = (parsed.widths as Record<string, unknown>)[id];
-        if (typeof w === "number" && w >= 28 && w < 4000) widths[id] = w;
+        if (typeof w === "number" && w >= 28 && w <= TABLE_COL_WIDTH_MAX) widths[id] = w;
       }
     }
     const visibleCount = MP3_TABLE_ALL_COLUMN_IDS.length - hidden.size;

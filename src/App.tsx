@@ -34,6 +34,8 @@ import { enrichTagsFromGvlByLabelcode } from "./audio/enrichTagsFromGvlLookup";
 import { EdlLibraryPanel, type LibraryDeleteInfo } from "./components/EdlLibraryPanel";
 import { MediaPlayerDock } from "./components/MediaPlayerDock";
 import { MenuBar } from "./components/MenuBar";
+import { PlayerWorkspace } from "./components/PlayerWorkspace";
+import { loadAppMode, saveAppMode, type AppMode } from "./player/appMode";
 import { StoragePathsModal } from "./components/StoragePathsModal";
 import { SystemSettingsModal } from "./components/SystemSettingsModal";
 import { SetDurationModal } from "./components/SetDurationModal";
@@ -128,7 +130,7 @@ import { uploadRestoreBackup } from "./api/adminRestoreApi";
 import { apiStoragePathsFetch } from "./api/storagePathsApi";
 import { fetchUsersList } from "./api/usersApi";
 import type { AppUserRecord } from "./storage/appUsersStorage";
-import { displayName } from "./storage/appUsersStorage";
+import { displayName, userHasMusiclistAccess, userHasPlayerAccess } from "./storage/appUsersStorage";
 import {
   apiUserSessionSyncFetch,
   apiUserSessionSyncPut,
@@ -156,6 +158,7 @@ import { deleteMp3FilesFromSharedStorage } from "./tracks/deleteMp3FromSharedSto
 import {
   applyDuplicateOverwriteToSharedStorage,
   deriveExportProjectFolderName,
+  duplicateCandidateDisplayPath,
   exportFakeTracksToSharedStorage,
   findDuplicateCandidatesInMusicDbPaths,
   loadCandidateTagsFromSharedMusicDb,
@@ -193,7 +196,6 @@ import {
   emptyMp3FiltersRecord,
   getMp3ColumnLabel,
   loadMp3TableLayout,
-  mp3ColumnWidthMax,
   mp3ResizeMinForColumnId,
   MP3_TABLE_ALL_COLUMN_IDS,
   sanitizeMp3ColumnWidths,
@@ -203,7 +205,6 @@ import {
 } from "./mp3TableLayout";
 import {
   defaultEdlColumnWidthsById,
-  edlColumnWidthMax,
   emptyEdlFiltersRecord,
   getEdlColumnLabel,
   loadEdlTableLayout,
@@ -844,6 +845,12 @@ export default function App() {
   );
   const [fontScale, setFontScale] = useState(() => loadFontScale());
   const [theme, setTheme] = useState<AppTheme>(() => loadTheme());
+  const [appModeChoice, setAppModeState] = useState<AppMode>(() => loadAppMode());
+  const setAppMode = useCallback((mode: AppMode) => {
+    setAppModeState(mode);
+    saveAppMode(mode);
+    if (mode === "player") setTagsCtxMenu(null);
+  }, []);
   /** Entspricht `calc(100vh - 9.5rem)` wie bisher — Basis für EDL-/MP3-Höhen ohne Zusatz. */
   const splitBaseHeightPx = useMemo(() => {
     const rem =
@@ -1003,6 +1010,9 @@ export default function App() {
 
   const isAdmin = currentUser?.role === "admin";
   const isCustomerUser = currentUser?.role === "customer";
+  const canUseMusiclist = currentUser ? userHasMusiclistAccess(currentUser) : true;
+  const canUsePlayer = currentUser ? userHasPlayerAccess(currentUser) : false;
+  const appMode: AppMode = !canUsePlayer ? "musiclist" : !canUseMusiclist ? "player" : appModeChoice;
   /** Playlist wie Export + Kunden-UI (Admin-Vorschau oder echtes Kundenkonto). */
   const playlistAsCustomerExport = customerModeActive || isCustomerUser;
 
@@ -2322,8 +2332,10 @@ export default function App() {
 
   const dupModalMultiHits = dupModal != null && dupModal.candidates.length > 1;
   const dupOverwriteButtonDisabled =
-    dupModalMultiHits &&
-    !dupModal!.candidates.some((c) => dupOverwritePick[c.existingFileName]);
+    dupModal != null &&
+    (dupModalMultiHits
+      ? !dupModal.candidates.some((c) => !c.player && dupOverwritePick[c.existingFileName])
+      : !!dupModal.candidates[0]?.player);
 
   useEffect(() => {
     if (!mp3DbToolsMenuOpen) return;
@@ -2368,6 +2380,7 @@ export default function App() {
             next[playlistTagKey(row.id)] = overlayFromForm(base, fullMerged);
           }
           for (const c of dm.candidates) {
+            if (c.player) continue;
             const fk = fileTagKey(c.existingFileName);
             const fileBase = defaultTagsFromPlaylistTitle(c.existingFileName);
             const dbBaseline = mergeWarnungForDisplay({
@@ -2671,6 +2684,7 @@ export default function App() {
         (ae instanceof HTMLElement && ae.isContentEditable)
       )
         return;
+      if (appMode === "player") return;
       if (tagModal || tagModalLoadBusy) return;
       if (playlistAsCustomerExport) return;
       if (edlSelectedRowIndices.size === 1 && playlist?.length) {
@@ -2692,6 +2706,7 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [
+    appMode,
     tagModal,
     tagModalLoadBusy,
     playlistAsCustomerExport,
@@ -3341,6 +3356,7 @@ export default function App() {
             onDuplicate: askDuplicate,
             projectFolderName,
             onlyIndices,
+            includePlayerCatalog: true,
             getTagsForIndex: (index) => {
               const row = playlist[index];
               const base = defaultTagsFromPlaylistTitle(row.linkedTrackFileName ?? row.title);
@@ -4914,8 +4930,6 @@ Oliver`,
         clientX: e.clientX,
         startWidths: [...edlColWidthsRef.current],
         minForIndex: (i) => edlResizeMinForColumnId(ids[i]!),
-        maxForIndex: (i) => edlColumnWidthMax(ids[i]!),
-        lastColumnAuto: true,
         getColElements: () => edlColGroupRef.current?.children,
         onCommit: (nextWidths) => {
           setEdlColWidthsById((prev) => {
@@ -4941,8 +4955,6 @@ Oliver`,
         clientX: e.clientX,
         startWidths: [...mp3ColWidthsRef.current],
         minForIndex: (i) => mp3ResizeMinForColumnId(ids[i]!),
-        maxForIndex: (i) => mp3ColumnWidthMax(ids[i]!),
-        lastColumnAuto: true,
         getColElements: () => mp3ColGroupRef.current?.children,
         onCommit: (nextWidths) => {
           setMp3ColWidthsById((prev) => {
@@ -5258,8 +5270,13 @@ Oliver`,
           fontScaleIncDisabled={fontScaleIncDisabled}
           theme={theme}
           onThemeChange={setTheme}
+          appMode={appMode}
+          onAppModeChange={setAppMode}
+          showAppSwitch={canUseMusiclist && canUsePlayer}
         />
 
+        {appMode === "player" ? <PlayerWorkspace isAdmin={isAdmin} /> : null}
+        {appMode === "musiclist" ? (
         <div
           className="split-panes"
           ref={splitPanesRef}
@@ -5447,22 +5464,17 @@ Oliver`,
                       <div
                         className="table-wrap table-wrap--dense"
                       >
-                        <table className="table-dense table-resizable">
+                        <table
+                          className="table-dense table-resizable"
+                          style={{
+                            width: edlDisplayWidthsArr.reduce((a, b) => a + b, 0),
+                            minWidth: edlDisplayWidthsArr.reduce((a, b) => a + b, 0),
+                          }}
+                        >
                           <colgroup ref={edlColGroupRef}>
                             {edlDisplayWidthsArr.map((w, i) => {
-                              const last = i === edlDisplayWidthsArr.length - 1;
                               const colId = edlDisplayColumnIds[i]!;
-                              const minW = edlResizeMinForColumnId(colId);
-                              return (
-                                <col
-                                  key={colId}
-                                  style={
-                                    last
-                                      ? { width: "auto", minWidth: w }
-                                      : { width: w, minWidth: minW }
-                                  }
-                                />
-                              );
+                              return <col key={colId} style={{ width: w, minWidth: w }} />;
                             })}
                           </colgroup>
                           <thead>
@@ -6041,22 +6053,17 @@ Oliver`,
                   <div
                     className="table-wrap table-wrap--dense"
                   >
-                  <table className="table-dense table-resizable">
+                  <table
+                    className="table-dense table-resizable"
+                    style={{
+                      width: mp3VisibleWidthsArr.reduce((a, b) => a + b, 0),
+                      minWidth: mp3VisibleWidthsArr.reduce((a, b) => a + b, 0),
+                    }}
+                  >
                     <colgroup ref={mp3ColGroupRef}>
                       {mp3VisibleWidthsArr.map((w, i) => {
-                        const last = i === mp3VisibleWidthsArr.length - 1;
                         const colId = mp3VisibleColumnIds[i]!;
-                        const minW = mp3ResizeMinForColumnId(colId);
-                        return (
-                          <col
-                            key={colId}
-                            style={
-                              last
-                                ? { width: "auto", minWidth: w }
-                                : { width: w, minWidth: minW }
-                            }
-                          />
-                        );
+                        return <col key={colId} style={{ width: w, minWidth: w }} />;
                       })}
                     </colgroup>
                     <thead>
@@ -6245,6 +6252,7 @@ Oliver`,
             )}
           </section>
         </div>
+        ) : null}
       </div>
 
       {tagsCtxMenu && tagCtxMenuPos && (
@@ -7214,8 +7222,8 @@ Oliver`,
                           <DupModalComparedFilename
                             text={dupModal.proposedFileName}
                             other={
-                              splitPathForDupModal(dupModal.candidates[0].existingFileName).base ||
-                              basenamePath(dupModal.candidates[0].existingFileName)
+                              splitPathForDupModal(duplicateCandidateDisplayPath(dupModal.candidates[0])).base ||
+                              basenamePath(duplicateCandidateDisplayPath(dupModal.candidates[0]))
                             }
                           />
                         )}
@@ -7228,7 +7236,9 @@ Oliver`,
                         disabled={dupOverwriteButtonDisabled}
                         title={
                           dupOverwriteButtonDisabled
-                            ? "Bei mehreren Treffern mindestens einen Treffer per Checkbox zum Überschreiben auswählen."
+                            ? dupModalMultiHits
+                              ? "Bei mehreren Treffern mindestens einen Treffer per Checkbox zum Überschreiben auswählen."
+                              : "Titel aus der Player-Datenbank können nicht überschrieben werden."
                             : "Bestehende Datei(en) durch neue MP3 mit den Tags von „Neu“ ersetzen."
                         }
                         onClick={() => {
@@ -7258,10 +7268,12 @@ Oliver`,
 
                 <p className="modal-dup-section-title modal-dup-hits-title">Treffer in der Musikdatenbank</p>
                 {dupModal.candidates.map((c, hitIdx) => {
-                  const sp = splitPathForDupModal(c.existingFileName);
+                  const displayPath = duplicateCandidateDisplayPath(c);
+                  const sp = splitPathForDupModal(displayPath);
                   return (
                     <div className="modal-dup-candidate-block" key={c.existingFileName}>
                       <p className="modal-dup-candidate-hint">
+                        {c.player ? "Player-Datenbank — " : ""}
                         {c.kind === "exact"
                           ? "Exakter Dateiname"
                           : "Vermutlich gleicher Titel (ähnlicher Dateiname)"}
@@ -7273,12 +7285,12 @@ Oliver`,
                               <span className="modal-dup-neu-compare-label">Neu:</span>
                               <DupModalComparedFilename
                                 text={dupModal.proposedFileName}
-                                other={sp.base || basenamePath(c.existingFileName)}
+                                other={sp.base || basenamePath(displayPath)}
                               />
                             </div>
                           )}
                           <div className="modal-dup-path-hit-line">
-                            {dupModalMultiHits && (
+                            {dupModalMultiHits && !c.player && (
                               <input
                                 type="checkbox"
                                 className="modal-dup-overwrite-cb"
@@ -7290,7 +7302,7 @@ Oliver`,
                                   }))
                                 }
                                 aria-label={`Treffer „${
-                                  sp.base || basenamePath(c.existingFileName)
+                                  sp.base || basenamePath(displayPath)
                                 }“ zum Überschreiben mit neuem Datensatz auswählen`}
                               />
                             )}
@@ -7302,7 +7314,7 @@ Oliver`,
                                 {sp.dir.trim() ? sp.dir : "—"}
                               </span>
                               <DupModalComparedFilename
-                                text={sp.base || basenamePath(c.existingFileName)}
+                                text={sp.base || basenamePath(displayPath)}
                                 other={dupModal.proposedFileName}
                               />
                             </div>

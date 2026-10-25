@@ -2,6 +2,14 @@ import { hasAnyAudioTagValue, mergeWarnungForDisplay, type AudioTags } from "../
 import { embedId3InMp3Blob } from "../audio/embedId3";
 import { readAudioTagsFromBlob } from "../audio/readId3Tags";
 import { writeAudioTagsToSharedMp3 } from "../audio/writeAudioTagsToSharedMp3";
+import {
+  audioTagsToPlayerPatch,
+  linkSharedPathToPlayerTrack,
+  matchPlayerCatalog,
+  patchPlayerTrackTags,
+  playerTrackToAudioTags,
+  type PlayerMatchResult,
+} from "../api/playerCatalogApi";
 import { apiSharedTracksReadBinary } from "../api/sharedTracksApi";
 import { titlesLikelySame } from "../edl/similarTitle";
 import type { PlaylistEntry } from "../edl/types";
@@ -52,8 +60,68 @@ export type DuplicateCandidateKind = "exact" | "similar";
 /** Ein Treffer in der Musikdatenbank (exakter Dateiname oder ähnlicher Titel). */
 export type DuplicateCandidate = {
   kind: DuplicateCandidateKind;
+  /** Musiclist: relativer MP3-Pfad. Player-Treffer: `player:<id>` (nur Schlüssel). */
   existingFileName: string;
+  /** Treffer aus der Musikdatenbank des Players (Datei liegt auf dem NAS). */
+  player?: { trackId: number; filePath: string; fileName: string };
 };
+
+export function duplicateCandidateDisplayPath(c: DuplicateCandidate): string {
+  return c.player ? c.player.filePath : c.existingFileName;
+}
+
+function playerCandidateKey(trackId: number): string {
+  return `player:${trackId}`;
+}
+
+function normPathLower(p: string): string {
+  return p.replace(/\\/g, "/").trim().toLowerCase();
+}
+
+/**
+ * Player-Treffer für einen Stamm (gleiche Logik wie Musiclist: exakter Dateiname, dann ähnlicher Titel).
+ * Ist der Player-Track schon mit einer MP3 der Musiclist verknüpft, wird diese MP3 als Musiclist-Treffer angeboten.
+ */
+function addPlayerCandidates(
+  stem: string,
+  conflicts: DuplicateCandidate[],
+  match: PlayerMatchResult | null,
+  existingByLower: Map<string, string>,
+  candidateTags: Record<string, AudioTags>
+): DuplicateCandidate[] {
+  const hits = match?.results[stem];
+  if (!hits?.length) return conflicts;
+  const seen = new Set(conflicts.map((c) => normPathLower(c.existingFileName)));
+  const exact: DuplicateCandidate[] = [];
+  const similar: DuplicateCandidate[] = [];
+  for (const t of hits) {
+    const fileStem = stripExtension(t.fileName);
+    const isExact = sanitizeFilenameStem(fileStem).toLowerCase() === stem.toLowerCase();
+    if (!isExact && !titlesLikelySame(stem, fileStem) && !titlesLikelySame(stem, t.title)) continue;
+    const kind: DuplicateCandidateKind = isExact ? "exact" : "similar";
+    const linkedInDb = (match?.links[String(t.id)] ?? [])
+      .map((p) => existingByLower.get(normPathLower(p)))
+      .find((p): p is string => !!p);
+    if (linkedInDb) {
+      if (seen.has(normPathLower(linkedInDb))) continue;
+      seen.add(normPathLower(linkedInDb));
+      (isExact ? exact : similar).push({ kind, existingFileName: linkedInDb });
+      continue;
+    }
+    const key = playerCandidateKey(t.id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidateTags[key] = mergeWarnungForDisplay(playerTrackToAudioTags(t));
+    (isExact ? exact : similar).push({
+      kind,
+      existingFileName: key,
+      player: { trackId: t.id, filePath: t.relPath, fileName: t.fileName },
+    });
+  }
+  const musiclistExact = conflicts.filter((c) => c.kind === "exact");
+  const musiclistSimilar = conflicts.filter((c) => c.kind !== "exact");
+  return [...musiclistExact, ...exact, ...musiclistSimilar, ...similar];
+}
 
 export type DuplicatePrompt = {
   playlistTitle: string;
@@ -273,6 +341,8 @@ export type ExportTracksCallbacks = {
   projectFolderName?: string;
   /** Nur diese Playlist-Indizes exportieren (z. B. nur „offline“ ohne Eintrag in der Musikdatenbank). */
   onlyIndices?: Set<number>;
+  /** Zusätzlich die Musikdatenbank des Players nach Treffern durchsuchen (nur Server-Speicher). */
+  includePlayerCatalog?: boolean;
 };
 
 export type ExportTracksResult = {
@@ -506,7 +576,7 @@ async function nextFreeMp3NameShared(
 export async function exportFakeTracksToSharedStorage(
   playlist: PlaylistEntry[],
   sink: SharedFakeMp3Sink,
-  { onDuplicate, getTagsForIndex, projectFolderName, onlyIndices }: ExportTracksCallbacks
+  { onDuplicate, getTagsForIndex, projectFolderName, onlyIndices, includePlayerCatalog }: ExportTracksCallbacks
 ): Promise<ExportTracksResult> {
   const updates: { index: number; linkedTrackFileName: string }[] = [];
   const identicalChoiceIndices: number[] = [];
@@ -537,6 +607,24 @@ export async function exportFakeTracksToSharedStorage(
   const usedBasenamesLower = new Set(
     existingMp3Paths.map((p) => basenamePath(p).toLowerCase())
   );
+  const existingByLower = new Map(existingMp3Paths.map((p) => [normPathLower(p), p]));
+
+  const stemForIndex = (index: number) => {
+    const row = playlist[index]!;
+    return sanitizeFilenameStem(stripExtension(row.linkedTrackFileName ?? row.title));
+  };
+  let playerMatch: PlayerMatchResult | null = null;
+  if (includePlayerCatalog) {
+    const stems = new Set<string>();
+    for (let i = 0; i < playlist.length; i++) {
+      if (onlyIndices && !onlyIndices.has(i)) continue;
+      const s = stemForIndex(i);
+      if (s) stems.add(s);
+    }
+    if (stems.size > 0) {
+      playerMatch = await matchPlayerCatalog([...stems]).catch(() => null);
+    }
+  }
 
   const stemToPathThisExport = new Map<string, string>();
 
@@ -544,8 +632,7 @@ export async function exportFakeTracksToSharedStorage(
     if (onlyIndices && !onlyIndices.has(index)) continue;
 
     const row = playlist[index];
-    const raw = row.linkedTrackFileName ?? row.title;
-    const stem = sanitizeFilenameStem(stripExtension(raw));
+    const stem = stemForIndex(index);
     const proposedFileName = `${stem}.mp3`;
 
     const reusedInThisExport = stemToPathThisExport.get(stem);
@@ -554,7 +641,16 @@ export async function exportFakeTracksToSharedStorage(
       continue;
     }
 
-    const conflicts = findDuplicateCandidatesInMusicDbPaths(stem, proposedFileName, existingMp3Paths);
+    const playerCandidateTags: Record<string, AudioTags> = {};
+    const conflicts = addPlayerCandidates(
+      stem,
+      findDuplicateCandidatesInMusicDbPaths(stem, proposedFileName, existingMp3Paths),
+      playerMatch,
+      existingByLower,
+      playerCandidateTags
+    );
+    const tagsForCandidate = async (c: DuplicateCandidate) =>
+      c.player ? playerCandidateTags[c.existingFileName] ?? {} : readTagsFromSharedMp3Path(c.existingFileName);
 
     let storedRelativePath: string;
 
@@ -563,7 +659,7 @@ export async function exportFakeTracksToSharedStorage(
       let choice: DuplicateChoice;
       if (isSingleExactFilenameDuplicate(conflicts)) {
         const existingFileName = conflicts[0].existingFileName;
-        const fileTags = await readTagsFromSharedMp3Path(existingFileName);
+        const fileTags = await tagsForCandidate(conflicts[0]);
         choice = {
           action: "identical",
           existingFileName,
@@ -573,7 +669,7 @@ export async function exportFakeTracksToSharedStorage(
       } else {
         const candidateTagsByPath: Record<string, AudioTags> = {};
         for (const c of conflicts) {
-          candidateTagsByPath[c.existingFileName] = await readTagsFromSharedMp3Path(c.existingFileName);
+          candidateTagsByPath[c.existingFileName] = await tagsForCandidate(c);
         }
         choice = await onDuplicate({
           playlistTitle: row.title,
@@ -588,7 +684,41 @@ export async function exportFakeTracksToSharedStorage(
       const propMerged = mergeWarnungForDisplay(choice.proposedTagsEdited);
       duplicateProposedTagsByIndex[index] = propMerged;
 
-      if (choice.action === "identical") {
+      const chosenPlayer =
+        choice.action === "identical"
+          ? conflicts.find((c) => c.existingFileName === choice.existingFileName)?.player
+          : undefined;
+      const overwritePaths =
+        choice.action === "overwrite"
+          ? choice.relativePaths.filter((p) => !conflicts.find((c) => c.existingFileName === p)?.player)
+          : [];
+
+      if (choice.action === "identical" && chosenPlayer) {
+        /** Player-Track: MP3-Eintrag in der Musiclist anlegen (Tags vom Player) und verknüpfen. */
+        const exMerged = mergeWarnungForDisplay(choice.existingFileTagsEdited);
+        const playerStem = sanitizeFilenameStem(stripExtension(chosenPlayer.fileName)) || stem;
+        const newBasename = await nextFreeMp3NameShared(
+          prefixRel,
+          playerStem,
+          usedBasenamesLower,
+          sink.fileExists
+        );
+        let blob: Blob = createFakeMp3Blob();
+        if (hasAnyAudioTagValue(exMerged)) {
+          blob = await embedId3InMp3Blob(blob, exMerged);
+        }
+        storedRelativePath = prefixRel ? `${prefixRel}${newBasename}` : newBasename;
+        await sink.writeMp3Blob(storedRelativePath, blob);
+        usedBasenamesLower.add(newBasename.toLowerCase());
+        await linkSharedPathToPlayerTrack(storedRelativePath, chosenPlayer.trackId);
+        const before = audioTagsToPlayerPatch(playerCandidateTags[choice.existingFileName] ?? {});
+        const after = audioTagsToPlayerPatch(exMerged);
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          await patchPlayerTrackTags(chosenPlayer.trackId, after);
+        }
+        identicalChoiceIndices.push(index);
+        duplicateIdenticalFileTagsByIndex[index] = { relativePath: storedRelativePath, tags: exMerged };
+      } else if (choice.action === "identical") {
         storedRelativePath = choice.existingFileName;
         identicalChoiceIndices.push(index);
         const exMerged = mergeWarnungForDisplay(choice.existingFileTagsEdited);
@@ -597,8 +727,8 @@ export async function exportFakeTracksToSharedStorage(
           tags: exMerged,
         };
         await rewriteSharedMp3Id3(choice.existingFileName, choice.existingFileTagsEdited, sink);
-      } else if (choice.action === "overwrite") {
-        const paths = choice.relativePaths;
+      } else if (choice.action === "overwrite" && overwritePaths.length > 0) {
+        const paths = overwritePaths;
         let blob: Blob = createFakeMp3Blob();
         if (hasAnyAudioTagValue(propMerged)) {
           blob = await embedId3InMp3Blob(blob, propMerged);

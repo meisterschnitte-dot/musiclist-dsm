@@ -1,2 +1,2 @@
 /** Anzeigeversion auf der Hauptseite (Menüleiste). */
-export const APP_VERSION = "V1.9.3";
+export const APP_VERSION = "V2.0.0";

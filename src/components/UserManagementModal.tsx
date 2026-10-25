@@ -15,6 +15,8 @@ import {
   findUserByEmail,
   isUserRecordActive,
   normalizeUserEmail,
+  userHasMusiclistAccess,
+  userHasPlayerAccess,
 } from "../storage/appUsersStorage";
 
 type Props = {
@@ -385,6 +387,37 @@ export function UserManagementModal({
     [users, reloadList, currentUserId]
   );
 
+  const flipUserAccess = useCallback(
+    async (u: AppUserRecord, area: "musiclist" | "player") => {
+      const musiclistAccess = area === "musiclist" ? !userHasMusiclistAccess(u) : userHasMusiclistAccess(u);
+      const playerAccess = area === "player" ? !userHasPlayerAccess(u) : userHasPlayerAccess(u);
+      setErr(null);
+      setInfo(null);
+      if (!musiclistAccess && !playerAccess) {
+        setErr("Mindestens Musiclist oder Musicplayer muss freigegeben sein.");
+        return;
+      }
+      setBusy(true);
+      try {
+        await updateUserRequest(u.id, {
+          firstName: u.firstName,
+          lastName: u.lastName,
+          email: u.email,
+          role: u.role,
+          musiclistAccess,
+          playerAccess,
+          ...(u.role === "customer" ? { companyName: u.companyName ?? "" } : {}),
+        });
+        await reloadList();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Speichern fehlgeschlagen.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [reloadList]
+  );
+
   if (!open) return null;
 
   return (
@@ -439,6 +472,8 @@ export function UserManagementModal({
                 <th>Firma</th>
                 <th>Rolle</th>
                 <th>Status</th>
+                <th title="Zugriff auf den Musiclist-Bereich (Kunden weiterhin nur für ihre Firma)">Musiclist</th>
+                <th title="Zugriff auf den Musicplayer: gesamte Musikdatenbank und eigene Playlisten">Musicplayer</th>
                 <th>Eingeloggt</th>
                 <th>Doppellogin</th>
                 <th />
@@ -488,6 +523,34 @@ export function UserManagementModal({
                       <span>{isUserRecordActive(u) ? "Aktiv" : "Inaktiv"}</span>
                     </label>
                   </td>
+                  {(["musiclist", "player"] as const).map((area) => {
+                    const on = area === "musiclist" ? userHasMusiclistAccess(u) : userHasPlayerAccess(u);
+                    const isAdminRow = u.role === "admin";
+                    return (
+                      <td key={area}>
+                        <label className="user-mgmt-active-toggle">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            aria-checked={on}
+                            aria-label={`${area === "musiclist" ? "Musiclist" : "Musicplayer"} für ${u.email}`}
+                            className="user-mgmt-switch"
+                            checked={on}
+                            disabled={busy || isAdminRow}
+                            title={
+                              isAdminRow
+                                ? "Administratoren haben immer Zugriff"
+                                : on
+                                  ? "Zugriff entziehen"
+                                  : "Zugriff erlauben"
+                            }
+                            onChange={() => void flipUserAccess(u, area)}
+                          />
+                          <span>{on ? "An" : "Aus"}</span>
+                        </label>
+                      </td>
+                    );
+                  })}
                   <td>
                     <span className={u.loggedIn ? "user-mgmt-presence user-mgmt-presence--online" : "user-mgmt-presence"}>
                       {u.loggedIn ? "Ja" : "Nein"}
@@ -536,7 +599,7 @@ export function UserManagementModal({
               ))}
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="user-mgmt-empty">
+                  <td colSpan={11} className="user-mgmt-empty">
                     Keine Benutzer für den aktuellen Filter.
                   </td>
                 </tr>

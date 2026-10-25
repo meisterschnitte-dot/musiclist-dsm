@@ -1,3 +1,4 @@
+import { syncPlayerTagsForSharedPath } from "../api/playerCatalogApi";
 import { embedId3InMp3Blob } from "./embedId3";
 import type { AudioTags } from "./audioTags";
 import { createFakeMp3Blob } from "../tracks/fakeMp3Blob";
@@ -30,4 +31,5 @@ export async function writeAudioTagsToSharedMp3(
   const out = await embedId3InMp3Blob(blob, tags);
   const ab = await out.arrayBuffer();
   await writeBinary(relativePath, ab);
+  await syncPlayerTagsForSharedPath(relativePath, tags).catch(() => false);
 }

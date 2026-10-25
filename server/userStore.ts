@@ -55,6 +55,8 @@ function readUsersSync(): StoredUser[] {
           companyName: typeof o.companyName === "string" && o.companyName.trim() ? o.companyName.trim() : undefined,
           customerId: typeof o.customerId === "string" && o.customerId.trim() ? o.customerId.trim() : undefined,
           active: o.active === false ? false : true,
+          ...(typeof o.musiclistAccess === "boolean" ? { musiclistAccess: o.musiclistAccess } : {}),
+          ...(typeof o.playerAccess === "boolean" ? { playerAccess: o.playerAccess } : {}),
         });
       }
     }

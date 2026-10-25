@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { verifyUserToken } from "./authToken";
 import { findById, isUserActive, listUsers } from "./userStore";
+import { hasPlayerAccess } from "./userTypes";
 export function bearerAuth(req: Request, res: Response, next: NextFunction): void {
   const h = req.headers.authorization;
   const m = typeof h === "string" ? h.match(/^Bearer\s+(.+)$/i) : null;
@@ -29,6 +30,14 @@ export function bearerAuth(req: Request, res: Response, next: NextFunction): voi
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   if (req.authUser?.role !== "admin") {
     res.status(403).json({ error: "Nur für Administratoren." });
+    return;
+  }
+  next();
+}
+
+export function requirePlayerAccess(req: Request, res: Response, next: NextFunction): void {
+  if (!req.authUser || !hasPlayerAccess(req.authUser)) {
+    res.status(403).json({ error: "Kein Zugriff auf den Musicplayer." });
     return;
   }
   next();

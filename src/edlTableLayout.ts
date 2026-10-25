@@ -2,7 +2,7 @@ import {
   AUDIO_TAG_FIELD_LABELS,
   AUDIO_TAG_TABLE_COLUMN_KEYS,
 } from "./audio/audioTags";
-import { TAG_COLUMN_MIN_WIDTHS } from "./tableColumnLayout";
+import { TABLE_COL_WIDTH_MAX, TAG_COLUMN_MIN_WIDTHS } from "./tableColumnLayout";
 
 const LS_KEY = "musiclist-edl-table-layout-v1";
 
@@ -55,23 +55,9 @@ export function edlResizeMinForColumnId(id: EdlTableColumnId): number {
   return TAG_COLUMN_MIN_WIDTHS[id] ?? 28;
 }
 
-/** Obergrenze pro Spalte (verhindert kaputte localStorage-Werte und zu breite #/TC-Spalten). */
-export function edlColumnWidthMax(id: EdlTableColumnId): number {
-  switch (id) {
-    case "num":
-      return 120;
-    case "track":
-      return 240;
-    case "tcIn":
-    case "tcOut":
-      return 200;
-    case "duration":
-      return 160;
-    case "title":
-      return 5600;
-    default:
-      return 4000;
-  }
+/** Obergrenze pro Spalte (verhindert kaputte localStorage-Werte). */
+export function edlColumnWidthMax(_id: EdlTableColumnId): number {
+  return TABLE_COL_WIDTH_MAX;
 }
 
 export function sanitizeEdlColumnWidths(
@@ -167,7 +153,7 @@ export function loadEdlTableLayout(): EdlTableLayoutState {
     if (parsed.widths && typeof parsed.widths === "object") {
       for (const id of EDL_TABLE_ALL_COLUMN_IDS) {
         const w = (parsed.widths as Record<string, unknown>)[id];
-        if (typeof w === "number" && w >= 28 && w < 4000) widths[id] = w;
+        if (typeof w === "number" && w >= 28 && w <= TABLE_COL_WIDTH_MAX) widths[id] = w;
       }
     }
     if (EDL_TABLE_ALL_COLUMN_IDS.length - hidden.size < 1) {

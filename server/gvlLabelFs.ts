@@ -65,5 +65,41 @@ export async function writeGvlLabelDb(db: GvlLabelDb): Promise<void> {
   return serialize(async () => {
     await fs.mkdir(SHARED_DIR, { recursive: true });
     await fs.writeFile(GVL_LABEL_DB_FILE, JSON.stringify(db, null, 2), "utf8");
+    gvlLookupCache = null;
   });
+}
+
+export function normalizeLabelcodeForMatch(s: string): string {
+  const d = s.replace(/\D/g, "");
+  if (d.length > 0) return d.replace(/^0+(?=\d)/, "");
+  return s.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+let gvlLookupCache: { importedAtIso: string; map: Map<string, GvlLabelEntry> } | null = null;
+
+export function gvlEntriesToLookupMap(entries: GvlLabelEntry[]): Map<string, GvlLabelEntry> {
+  const map = new Map<string, GvlLabelEntry>();
+  for (const entry of entries) {
+    const key = normalizeLabelcodeForMatch(entry.labelcode);
+    if (key && !map.has(key)) map.set(key, entry);
+  }
+  return map;
+}
+
+export function findGvlEntryByLabelcode(
+  map: Map<string, GvlLabelEntry>,
+  labelcodeRaw: string
+): GvlLabelEntry | undefined {
+  const key = normalizeLabelcodeForMatch(labelcodeRaw);
+  if (!key) return undefined;
+  return map.get(key);
+}
+
+export async function getGvlLookupMap(): Promise<Map<string, GvlLabelEntry>> {
+  const db = await readGvlLabelDb();
+  if (!db?.entries.length) return new Map();
+  if (gvlLookupCache && gvlLookupCache.importedAtIso === db.importedAtIso) return gvlLookupCache.map;
+  const map = gvlEntriesToLookupMap(db.entries);
+  gvlLookupCache = { importedAtIso: db.importedAtIso, map };
+  return map;
 }

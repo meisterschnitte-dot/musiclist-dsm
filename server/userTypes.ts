@@ -17,7 +17,19 @@ export type StoredUser = {
   customerId?: string;
   /** Fehlt in älteren JSON-Dateien: gilt als aktiv. */
   active?: boolean;
+  /** Zugriff auf den Musiclist-Bereich. Fehlt: erlaubt. */
+  musiclistAccess?: boolean;
+  /** Zugriff auf den Musicplayer (gesamte Player-Musikdatenbank). Fehlt: nur Administratoren. */
+  playerAccess?: boolean;
 };
+
+export function hasMusiclistAccess(u: Pick<StoredUser, "role" | "musiclistAccess">): boolean {
+  return u.role === "admin" || u.musiclistAccess !== false;
+}
+
+export function hasPlayerAccess(u: Pick<StoredUser, "role" | "playerAccess">): boolean {
+  return u.role === "admin" || u.playerAccess === true;
+}
 
 export type PublicUser = {
   id: string;
@@ -30,6 +42,8 @@ export type PublicUser = {
   companyName?: string;
   customerId?: string;
   active: boolean;
+  musiclistAccess: boolean;
+  playerAccess: boolean;
 };
 
 export function toPublicUser(u: StoredUser): PublicUser {
@@ -45,5 +59,7 @@ export function toPublicUser(u: StoredUser): PublicUser {
     companyName: u.companyName,
     customerId: u.customerId,
     active,
+    musiclistAccess: hasMusiclistAccess(u),
+    playerAccess: hasPlayerAccess(u),
   };
 }

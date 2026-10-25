@@ -89,6 +89,8 @@ export async function updateUserRequest(
     role: UserRole;
     companyName?: string;
     active?: boolean;
+    musiclistAccess?: boolean;
+    playerAccess?: boolean;
   }
 ): Promise<AppUserRecord> {
   const t = getUsersApiToken();

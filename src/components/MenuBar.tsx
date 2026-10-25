@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { APP_VERSION } from "../appVersion";
+import type { AppMode } from "../player/appMode";
 import type { AppTheme } from "../storage/themeStorage";
 
 type MenuId = "verwaltung" | "benutzer" | null;
@@ -38,6 +39,10 @@ type MenuBarProps = {
   fontScaleIncDisabled: boolean;
   theme: AppTheme;
   onThemeChange: (t: AppTheme) => void;
+  appMode: AppMode;
+  onAppModeChange: (mode: AppMode) => void;
+  /** Umschalter nur zeigen, wenn beide Bereiche freigegeben sind. */
+  showAppSwitch?: boolean;
 };
 
 export function MenuBar({
@@ -66,6 +71,9 @@ export function MenuBar({
   fontScaleIncDisabled,
   theme,
   onThemeChange,
+  appMode,
+  onAppModeChange,
+  showAppSwitch = true,
 }: MenuBarProps) {
   const [open, setOpen] = useState<MenuId>(null);
   const barRef = useRef<HTMLElement>(null);
@@ -87,6 +95,28 @@ export function MenuBar({
   return (
     <nav ref={barRef} className="menubar" aria-label="Hauptmenü">
       <span className="menubar-brand">{brand}</span>
+      {showAppSwitch ? (
+      <div className="menubar-app-switch" role="group" aria-label="Anwendung wechseln">
+        <button
+          type="button"
+          className={"menubar-theme-btn" + (appMode === "musiclist" ? " menubar-theme-btn--active" : "")}
+          aria-pressed={appMode === "musiclist"}
+          onClick={() => onAppModeChange("musiclist")}
+          title="Musiclist: EDL, Playlist, Musikdatenbank"
+        >
+          Musiclist
+        </button>
+        <button
+          type="button"
+          className={"menubar-theme-btn" + (appMode === "player" ? " menubar-theme-btn--active" : "")}
+          aria-pressed={appMode === "player"}
+          onClick={() => onAppModeChange("player")}
+          title="Interner Musikplayer (nur im Firmennetz)"
+        >
+          Player
+        </button>
+      </div>
+      ) : null}
       <div className="menubar-menus">
         {isAdmin ? (
           <div className="menu">

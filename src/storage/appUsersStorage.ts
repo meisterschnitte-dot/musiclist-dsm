@@ -13,6 +13,10 @@ export type AppUserRecord = {
   customerId?: string;
   /** Fehlt: gilt als aktiv. */
   active?: boolean;
+  /** Zugriff auf den Musiclist-Bereich (Server liefert aufgelösten Wert). */
+  musiclistAccess?: boolean;
+  /** Zugriff auf den Musicplayer (Server liefert aufgelösten Wert). */
+  playerAccess?: boolean;
   /** Server-Präsenz (Admin-Liste): innerhalb Aktivitätsfenster aktiv. */
   loggedIn?: boolean;
   /** Mehr als eine aktive Client-Session im Aktivitätsfenster. */
@@ -22,6 +26,14 @@ export type AppUserRecord = {
   /** Letzter Session-Sync vom Server. */
   lastSeenAtIso?: string | null;
 };
+
+export function userHasMusiclistAccess(u: AppUserRecord): boolean {
+  return u.role === "admin" || u.musiclistAccess !== false;
+}
+
+export function userHasPlayerAccess(u: AppUserRecord): boolean {
+  return u.role === "admin" || u.playerAccess === true;
+}
 
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();

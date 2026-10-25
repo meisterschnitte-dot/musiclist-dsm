@@ -16,6 +16,9 @@ function headerMinPx(label: string): number {
   return Math.min(168, Math.max(28, Math.ceil(label.length * perChar + pad)));
 }
 
+/** Obere Grenze beim Aufziehen — hoch genug, damit Spalten die Tabelle nach rechts schieben. */
+export const TABLE_COL_WIDTH_MAX = 20000;
+
 /** Mindestbreiten für ID3-Spalten (gleiche Logik wie in der EDL- und MP3-Tabelle). */
 export const TAG_COLUMN_MIN_WIDTHS: Record<keyof AudioTags, number> = (() => {
   const o = {} as Record<keyof AudioTags, number>;
